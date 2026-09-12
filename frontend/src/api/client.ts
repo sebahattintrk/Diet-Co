@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const API_BASE_URL = 'http://192.168.1.104:5001';
 
 export const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: 'https://diet-co.onrender.com',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
