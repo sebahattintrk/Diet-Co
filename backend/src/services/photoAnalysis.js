@@ -27,7 +27,7 @@ async function analyzePhoto({ user, latest, previous }) {
   }
   const previousImage = previous ? readImage(previous.file_path) : null;
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, latest, previous);
@@ -119,7 +119,7 @@ function buildPrompt(user, latest, previous) {
     : null;
 
   return [
-    'Sen FitIntel uygulamasının görsel takip yorumlayıcısısın. Bir kullanıcının bel bölgesi fotoğraflarına bakıp Türkçe, 2-3 cümlelik bir GÖRSEL DEĞİŞİM yorumu yapacaksın.',
+    'Sen Diet-Co uygulamasının görsel takip yorumlayıcısısın. Bir kullanıcının bel bölgesi fotoğraflarına bakıp Türkçe, 2-3 cümlelik bir GÖRSEL DEĞİŞİM yorumu yapacaksın.',
     '',
     'KESİN KURALLAR:',
     '- "Yağ oranın %X" gibi sayısal beden iddiası ASLA yapma.',

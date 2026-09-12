@@ -340,7 +340,7 @@ export function ProgressPhotosScreen() {
           <Card>
             <Text className="text-textLow text-[10px] uppercase tracking-widest mb-2">NASIL ÇALIŞIR</Text>
             <Text className="text-textMid text-sm" style={{ lineHeight: 18 }}>
-              FitIntel "yağ oranın şu" gibi tıbbi iddia yapmaz. Fotoğrafların, kilo + bel ölçüsü + uyum
+              Diet-Co "yağ oranın şu" gibi tıbbi iddia yapmaz. Fotoğrafların, kilo + bel ölçüsü + uyum
               verisiyle birlikte AI Karar Motoru'na sinyal verir — örn. "Kilon sabit ama bel ölçün ve görsel
               değişim olumlu, recomp sinyali" gibi.
             </Text>

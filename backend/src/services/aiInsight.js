@@ -50,7 +50,7 @@ async function buildInsight(user, last7, today) {
 }
 
 async function callGemini(apiKey, user, last7, today) {
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, last7, today);
@@ -117,7 +117,7 @@ function buildPrompt(user, last7, today) {
     : '';
 
   return [
-    'Sen FitIntel uygulamasının karar motoru AI\'sın. Kullanıcıya BUGÜN için tek bir KARAR KARTI üreteceksin.',
+    'Sen Diet-Co uygulamasının karar motoru AI\'sın. Kullanıcıya BUGÜN için tek bir KARAR KARTI üreteceksin.',
     '',
     'KART FORMATI (3 alan):',
     '1. situation: TEK satır, kısa headline. Şu an ne durumdayız? (örn: "Protein hedefinin %63\'ündesin")',

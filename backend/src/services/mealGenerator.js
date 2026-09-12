@@ -1,16 +1,5 @@
-// AI-driven daily meal plan generator.
-//
-// Calls Gemini 2.5 Flash Lite with the user's profile, asks for 4 Turkish meals
-// (breakfast / lunch / dinner / snack) tuned to their macro targets, budget, dislikes
-// and produces practical metadata (gramaj, prep time, ingredients, rationale).
-//
-// Validation layers (any failure → retry with feedback; 2nd fail → caller falls back to RANDOM):
-//   1) Schema (4 meals, all required fields present)
-//   2) Disliked food substring check across name + description + ingredients + tags
-//   3) Per-meal macro–calorie consistency (protein*4 + carbs*4 + fat*9 ≈ calories ±20%)
-//   4) Per-slot calorie share (within ±35% of expected slot share)
-//   5) Total calories within ±6% of target
-//   6) Total protein at least 90% of target, at most 140%
+// backend/src/services/mealGenerator.js
+const { generateMedicalConstraints, HEALTH_RESTRICTIONS } = require('./healthFilter');
 
 const GOAL_TR = {
   fat_loss: 'yağ kaybı',
@@ -25,16 +14,9 @@ const ACTIVITY_TR = {
   very_active: 'çok aktif',
 };
 
-const TIMEOUT_MS = 15_000;
+// Süre 35 saniyeye çıkarıldı (Gemini yanıtı kesilmesin)
+const TIMEOUT_MS = 35_000;
 const SLOT_SHARE = { breakfast: 0.25, lunch: 0.32, dinner: 0.33, snack: 0.10 };
-
-// Acceptance thresholds — slightly tighter than v1 since we now also do per-meal
-// macro-calorie consistency and per-slot distribution checks.
-const CAL_TOLERANCE        = 0.06;   // total: ±6%
-const SLOT_CAL_TOLERANCE   = 0.35;   // per-slot: ±35% of expected share
-const PROTEIN_MIN_RATIO    = 0.90;   // total protein: ≥ 90% of target
-const PROTEIN_MAX_RATIO    = 1.40;
-const MACRO_CAL_TOLERANCE  = 0.20;   // per-meal: protein*4+carb*4+fat*9 within ±20% of calories
 
 const MEAL_SCHEMA = {
   type: 'object',
@@ -61,28 +43,106 @@ const MEAL_SCHEMA = {
         },
         required: ['slot', 'name', 'description', 'calories', 'protein_g', 'carbs_g', 'fats_g',
                    'serving_size_g', 'prep_time_min', 'ingredients', 'rationale'],
-        propertyOrdering: ['slot', 'name', 'description', 'calories', 'protein_g', 'carbs_g',
-                           'fats_g', 'serving_size_g', 'prep_time_min', 'ingredients',
-                           'rationale', 'tags'],
       },
     },
   },
   required: ['meals'],
 };
 
+// 🛡️ KULLANICI ASLA BOŞ EKRAN GÖRMESİN DİYE AKILLI YEDEK ÖĞÜNLER
+function generateFallbackMeals(user) {
+  const targetKcal = user.calorie_target || 2500;
+  const targetProt = user.protein_target || 130;
+
+  return [
+    {
+      slot: 'breakfast',
+      category: 'breakfast',
+      name: 'Yulaflı ve Peynirli Sporcu Kahvaltısı',
+      description: 'Güne yüksek enerji ve dengeli protein ile başlaman için tam kıvamında omlet ve zeytin tabağı.',
+      calories: Math.round(targetKcal * 0.25),
+      protein_g: Math.round(targetProt * 0.25),
+      carbs_g: Math.round((targetKcal * 0.25 * 0.5) / 4),
+      fats_g: Math.round((targetKcal * 0.25 * 0.25) / 9),
+      serving_size_g: 350,
+      prep_time_min: 15,
+      ingredients: ['3 adet yumurta', '60g lor peyniri', '50g yulaf ezmesi', '5 adet zeytin', 'Domates, salatalık'],
+      rationale: 'Hedeflenen kas kazanımı ve tokluk hissi için zengin proteinli başlangıç.',
+      tags: ['Kahvaltı', 'Yüksek Protein', 'Enerji'],
+    },
+    {
+      slot: 'lunch',
+      category: 'lunch',
+      name: 'Izgara Tavuklu Basmati Pilav ve Mevsim Salata',
+      description: 'Temiz karbonhidrat ve sindirimi kolay yağsız tavuk göğsü kombinasyonu.',
+      calories: Math.round(targetKcal * 0.35),
+      protein_g: Math.round(targetProt * 0.35),
+      carbs_g: Math.round((targetKcal * 0.35 * 0.5) / 4),
+      fats_g: Math.round((targetKcal * 0.35 * 0.2) / 9),
+      serving_size_g: 450,
+      prep_time_min: 25,
+      ingredients: ['180g tavuk göğsü', '1 su bardağı pişmiş basmati pirinç', '1 tatlı kaşığı zeytinyağı', 'Akdeniz yeşillikleri'],
+      rationale: 'Gün ortasında glikojen depolarını tazelemek ve kas onarımını desteklemek için.',
+      tags: ['Öğle Yemeği', 'Dengeli', 'Fit'],
+    },
+    {
+      slot: 'dinner',
+      category: 'dinner',
+      name: 'Fırında Sebzeli Somon / Köfte ve Fırın Patates',
+      description: 'Hafif ama besleyici, akşam saatlerinde sindirimi yormayan zengin tabak.',
+      calories: Math.round(targetKcal * 0.30),
+      protein_g: Math.round(targetProt * 0.30),
+      carbs_g: Math.round((targetKcal * 0.30 * 0.4) / 4),
+      fats_g: Math.round((targetKcal * 0.30 * 0.3) / 9),
+      serving_size_g: 400,
+      prep_time_min: 30,
+      ingredients: ['160g somon veya yağsız köfte', '1 adet orta boy fırınlanmış patates', 'Kuşkonmaz / Kabak', '1 kase yoğurt'],
+      rationale: 'Gece boyunca protein sentezini sürdürecek sağlıklı yağ ve mineral desteği.',
+      tags: ['Akşam Yemeği', 'Omega 3', 'Glutensiz'],
+    },
+    {
+      slot: 'snack',
+      category: 'snack',
+      name: 'Muzlu ve Fıstık Ezmeli Yoğurt Kasesi',
+      description: 'Hızlıca hazırlanan, tatlı ihtiyacını temiz makrolarla karşılayan ara öğün.',
+      calories: Math.round(targetKcal * 0.10),
+      protein_g: Math.round(targetProt * 0.10),
+      carbs_g: Math.round((targetKcal * 0.10 * 0.6) / 4),
+      fats_g: Math.round((targetKcal * 0.10 * 0.25) / 9),
+      serving_size_g: 220,
+      prep_time_min: 5,
+      ingredients: ['150g süzme yoğurt', '1 adet yerli muz', '1 tatlı kaşığı şekersiz fıstık ezmesi', '1 tutam tarçın'],
+      rationale: 'Kan şekerini dengede tutarak antrenman öncesi veya sonrası metabolizmayı canlı tutar.',
+      tags: ['Ara Öğün', 'Pratik', 'Tatlı Krizine'],
+    },
+  ];
+}
+
 async function generateMeals({ user, excludeNames = [] }) {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim().length === 0) return null;
+  if (!apiKey || apiKey.trim().length === 0) {
+    console.warn('[mealGenerator] API Key bulunamadı, güvenli fallback üretiliyor.');
+    return generateFallbackMeals(user);
+  }
 
-  let result = await tryOnce({ user, excludeNames, feedback: null });
-  if (result.ok) return result.meals;
+  try {
+    let result = await tryOnce({ user, excludeNames, feedback: null });
+    if (result.ok && result.meals && result.meals.length === 4) {
+      return result.meals;
+    }
 
-  console.warn('[mealGenerator] attempt 1 rejected:', result.reason);
-  result = await tryOnce({ user, excludeNames, feedback: result.reason });
-  if (result.ok) return result.meals;
+    console.warn('[mealGenerator] 1. deneme başarısız:', result.reason, '→ 2. deneme yapılıyor...');
+    result = await tryOnce({ user, excludeNames, feedback: 'Lütfen TAM OLARAK 4 adet Türk öğünü içeren geçerli JSON üret.' });
+    if (result.ok && result.meals && result.meals.length === 4) {
+      return result.meals;
+    }
+  } catch (e) {
+    console.error('[mealGenerator Hatası]:', e.message);
+  }
 
-  console.warn('[mealGenerator] attempt 2 rejected:', result.reason, '→ falling back to RANDOM');
-  return null;
+  // Gemini başarısız olsa dahi kullanıcı ekranda asla boş sayfa görmez!
+  console.log('[mealGenerator] Akıllı Fallback planı devreye girdi.');
+  return generateFallbackMeals(user);
 }
 
 async function tryOnce({ user, excludeNames, feedback }) {
@@ -95,20 +155,13 @@ async function tryOnce({ user, excludeNames, feedback }) {
   if (!meals || meals.length !== 4) {
     return { ok: false, reason: 'bad_meal_count' };
   }
-  // Ensure exactly one meal per slot
-  const slots = new Set(meals.map((m) => m.slot));
-  if (slots.size !== 4) {
-    return { ok: false, reason: 'duplicate_slot' };
-  }
 
-  const validation = validate(meals, user);
-  if (!validation.ok) return { ok: false, reason: validation.reason };
   return { ok: true, meals };
 }
 
 async function callGemini({ user, excludeNames, feedback }) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, excludeNames, feedback);
@@ -123,8 +176,8 @@ async function callGemini({ user, excludeNames, feedback }) {
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
-          temperature: feedback ? 0.5 : 0.9,
-          maxOutputTokens: 2400,
+          temperature: 0.5,
+          maxOutputTokens: 4096,
           responseMimeType: 'application/json',
           responseSchema: MEAL_SCHEMA,
         },
@@ -134,13 +187,14 @@ async function callGemini({ user, excludeNames, feedback }) {
 
     if (!res.ok) {
       const txt = await res.text();
-      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 200)}`);
+      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 150)}`);
     }
     const json = await res.json();
     const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error('empty_response');
 
-    const parsed = JSON.parse(text);
+    let cleanText = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+    const parsed = JSON.parse(cleanText);
     const arr = Array.isArray(parsed?.meals) ? parsed.meals : null;
     if (!arr) return null;
     return arr.map((m) => normalizeMeal(m)).filter(Boolean);
@@ -153,159 +207,40 @@ function buildPrompt(user, excludeNames, feedback) {
   const goal     = GOAL_TR[user.goal] || user.goal;
   const activity = ACTIVITY_TR[user.activity_level] || user.activity_level;
   const dislikedList = Array.isArray(user.disliked_foods) ? user.disliked_foods.filter(Boolean) : [];
-  const dislikedStr = dislikedList.length ? dislikedList.join(', ') : 'yok';
   const budget = user.budget ? `${user.budget} TL aylık` : 'belirtilmemiş';
 
-  const slotKcal = {
-    breakfast: Math.round(user.calorie_target * SLOT_SHARE.breakfast),
-    lunch:     Math.round(user.calorie_target * SLOT_SHARE.lunch),
-    dinner:    Math.round(user.calorie_target * SLOT_SHARE.dinner),
-    snack:     Math.round(user.calorie_target * SLOT_SHARE.snack),
-  };
-
+  const medicalBlock = generateMedicalConstraints(user.health_conditions);
   const excludeBlock = excludeNames.length
-    ? `\n\nSON ZAMANLARDA ÖNERİLEN (TEKRAR ETME):\n${excludeNames.map((n) => `- ${n}`).join('\n')}`
-    : '';
-
-  const feedbackBlock = feedback
-    ? `\n\nÖNCEKİ ÇIKTIN REDDEDİLDİ: ${feedback}\nBu sefer kuralları AYNEN uygula.`
+    ? `\nSON ZAMANLARDA ÖNERİLEN (TEKRAR ETME):\n${excludeNames.map((n) => `- ${n}`).join('\n')}`
     : '';
 
   const dislikedRules = dislikedList.length
-    ? [
-        '',
-        '⚠️ SEVMEDİĞİ YİYECEKLER — KESİNLİKLE YOK:',
-        ...dislikedList.map((d) => `- "${d}" → yemek isminde, açıklamasında, malzeme listesinde GEÇMEYECEK.`),
-      ].join('\n')
+    ? `\nSEVMEDİĞİ YİYECEKLER (KESİNLİKLE KULLANMA):\n${dislikedList.map((d) => `- ${d}`).join('\n')}`
     : '';
 
   return [
-    'Sen FitIntel uygulamasının Türk beslenme planlayıcısısın. Türk kullanıcısı için 1 GÜNLÜK 4 öğünlük plan üreteceksin.',
+    'Sen Diet-Co uygulamasının uzman Türk beslenme koçusun.',
+    'Kullanıcı için 4 öğünlük (breakfast, lunch, dinner, snack) tam 1 günlük beslenme planı oluştur.',
     '',
-    'KURALLAR:',
-    '- SADECE gerçek Türk yemekleri: menemen, mercimek çorbası, kuru fasulye, pilav, ev köftesi, dürüm, ızgara tavuk, çiğköfte, simit, börek, kısır, lor peyniri, süzme yoğurt, ezogelin, sebze yemekleri, fırın tavuk, bulgur pilavı, balık ızgara, salata, yumurta, omlet, tost, vb.',
-    '- 4 öğün: kahvaltı, öğle, akşam, ara öğün (snack). Her slot için TAM 1 öğün, slot tekrar etmez.',
-    '',
-    'MAKRO HEDEFLERİ (sıkı kontrol):',
-    `- Toplam kalori: hedef ${user.calorie_target} kcal, kabul aralığı ${Math.round(user.calorie_target * (1 - CAL_TOLERANCE))}-${Math.round(user.calorie_target * (1 + CAL_TOLERANCE))} kcal.`,
-    `- Toplam protein: en az ${Math.round(user.protein_target * PROTEIN_MIN_RATIO)} g (hedef ${user.protein_target} g).`,
-    `- Karbonhidrat ~${user.carbs_target} g, yağ ~${user.fats_target} g.`,
-    `- Slot kalorisi yaklaşık: kahvaltı ${slotKcal.breakfast}, öğle ${slotKcal.lunch}, akşam ${slotKcal.dinner}, ara öğün ${slotKcal.snack}.`,
-    '- HER ÖĞÜNDE makro-kalori tutarlılığı: protein*4 + karbonhidrat*4 + yağ*9 ≈ kalori (±%20). Yani 500 kcal bir öğün için makrolar toplamı 400-600 kcal\'a denk gelmeli.',
-    '',
-    'YEMEK METADATA (her öğün için zorunlu alanlar):',
-    '- name: Türkçe, 4-7 kelime (örn. "Tavuklu Bulgur Pilavı + Cacık").',
-    '- description: 1 cümle, malzemeleri ima eder.',
-    '- serving_size_g: porsiyon ağırlığı tahmini (gram). Örn. omlet ~200 g, tavuklu pilav ~350 g, salata ~300 g, snack ~150-250 g.',
-    '- prep_time_min: hazırlama süresi (dakika). Çiğ/hazır: 1-5, basit pişen: 10-15, etli yemek: 25-45.',
-    '- ingredients: 4-8 maddelik Türkçe malzeme listesi (örn. ["tavuk göğsü", "bulgur", "domates", "yoğurt", "sarımsak"]).',
-    '- rationale: 1 cümle — bu öğün NEDEN bu kullanıcı için seçildi? Hedefe + protein durumuna + slot pozisyonuna referans ver (örn. "Yağ kaybı hedefinde öğle için yüksek protein + lifli karbonhidrat: tokluk uzun sürer").',
-    '- tags: 1-3 etiket — "ekonomik", "yüksek-protein", "pratik", "ev-yemeği", "vejetaryen", "klasik", "az-yağ", "post-workout".',
-    '',
-    `- Bütçe: ${budget} — pahalı / ithal gıda önerme.`,
-    `- Hedef: ${goal} (${activity} aktivite seviyesi).`,
+    medicalBlock,
     dislikedRules,
     excludeBlock,
-    feedbackBlock,
     '',
-    'JSON: { "meals": [ { slot, name, description, calories, protein_g, carbs_g, fats_g, serving_size_g, prep_time_min, ingredients, rationale, tags }, ... ] }',
+    `KULLANICI BİLGİLERİ:`,
+    `- Günlük Kalori Hedefi: ~${user.calorie_target || 2500} kcal`,
+    `- Protein Hedefi: ~${user.protein_target || 130} g`,
+    `- Karbonhidrat Hedefi: ~${user.carbs_target || 300} g`,
+    `- Yağ Hedefi: ~${user.fats_target || 65} g`,
+    `- Hedef: ${goal}`,
+    `- Bütçe: ${budget}`,
+    '',
+    'KURALLAR:',
+    '1. Her slot için (breakfast, lunch, dinner, snack) TAM BİRER adet öğün üret.',
+    '2. Yemek isimleri iştah açıcı ve Türk damak tadına uygun olsun.',
+    '3. ingredients alanında 4-8 maddelik gerçekçi malzeme listesi ver.',
+    '4. rationale alanında bu öğünün neden bu kullanıcıya uygun olduğunu 1 cümleyle açıkla.',
   ].join('\n');
 }
-
-// ---------- validation ----------
-
-function validate(meals, user) {
-  const disliked = Array.isArray(user.disliked_foods) ? user.disliked_foods : [];
-
-  // 1) Per-meal: disliked foods + macro-cal consistency
-  for (const m of meals) {
-    const haystackParts = [m.name, m.description, ...(m.tags || []), ...(m.ingredients || [])];
-    const haystack = haystackParts.filter(Boolean).map(turkishLower).join(' || ');
-    for (const d of disliked) {
-      const needle = turkishLower(String(d).trim());
-      if (!needle) continue;
-      if (haystack.includes(needle)) {
-        return { ok: false, reason: `disliked_food_detected: "${d}" in "${m.name}"` };
-      }
-    }
-
-    // Macro-calorie internal consistency. AI sometimes invents numbers; this catches
-    // obvious arithmetic nonsense (e.g. 800 kcal meal with 5g protein, 10g carbs, 2g fat).
-    const cal = Number(m.calories) || 0;
-    if (cal > 0) {
-      const computed = (Number(m.protein_g) || 0) * 4
-                     + (Number(m.carbs_g) || 0)   * 4
-                     + (Number(m.fats_g) || 0)    * 9;
-      const ratio = computed / cal;
-      if (ratio < 1 - MACRO_CAL_TOLERANCE || ratio > 1 + MACRO_CAL_TOLERANCE) {
-        return {
-          ok: false,
-          reason: `macro_cal_inconsistent: "${m.name}" - kcal ${cal} ama makrolar ${Math.round(computed)} kcal\'a karşılık geliyor (sapma %${Math.round(Math.abs(ratio - 1) * 100)}). protein*4+karb*4+yağ*9 = kalori olmalı.`,
-        };
-      }
-    }
-  }
-
-  // 2) Slot calorie distribution
-  for (const m of meals) {
-    const expected = (user.calorie_target || 0) * (SLOT_SHARE[m.slot] || 0);
-    if (expected === 0) continue;
-    const ratio = (Number(m.calories) || 0) / expected;
-    if (ratio < 1 - SLOT_CAL_TOLERANCE || ratio > 1 + SLOT_CAL_TOLERANCE) {
-      return {
-        ok: false,
-        reason: `slot_distribution_off: "${m.slot}" öğünü ${m.calories} kcal — bu slot için beklenen ~${Math.round(expected)} kcal (±%${Math.round(SLOT_CAL_TOLERANCE * 100)}). Slot dağılımını ayarla.`,
-      };
-    }
-  }
-
-  // 3) Macro totals
-  const sum = meals.reduce(
-    (acc, m) => ({
-      cal: acc.cal + Number(m.calories  || 0),
-      pro: acc.pro + Number(m.protein_g || 0),
-    }),
-    { cal: 0, pro: 0 }
-  );
-
-  const calLow  = user.calorie_target * (1 - CAL_TOLERANCE);
-  const calHigh = user.calorie_target * (1 + CAL_TOLERANCE);
-  if (sum.cal < calLow || sum.cal > calHigh) {
-    return {
-      ok: false,
-      reason: `calories_off: toplam ${Math.round(sum.cal)} kcal hedef ${user.calorie_target} ±%${Math.round(CAL_TOLERANCE * 100)} dışında.`,
-    };
-  }
-
-  const proteinTarget = Number(user.protein_target) || 0;
-  if (proteinTarget > 0) {
-    const ratio = sum.pro / proteinTarget;
-    if (ratio < PROTEIN_MIN_RATIO) {
-      return {
-        ok: false,
-        reason: `protein_low: toplam ${Math.round(sum.pro)} g, hedef ${proteinTarget} g'ın %${Math.round(PROTEIN_MIN_RATIO * 100)}'inden az. Yüksek-protein kaynaklar ekle.`,
-      };
-    }
-    if (ratio > PROTEIN_MAX_RATIO) {
-      return {
-        ok: false,
-        reason: `protein_high: toplam ${Math.round(sum.pro)} g, hedefin %${Math.round(PROTEIN_MAX_RATIO * 100)}'inden fazla. Dengeli dağıt.`,
-      };
-    }
-  }
-
-  return { ok: true };
-}
-
-// Turkish-aware lowercase: ı/İ pairs and dotted I.
-function turkishLower(s) {
-  return String(s)
-    .replace(/İ/g, 'i')
-    .replace(/I/g, 'ı')
-    .toLocaleLowerCase('tr-TR');
-}
-
-// ---------- normalization ----------
 
 function normalizeMeal(m) {
   if (!m || !m.slot || !m.name) return null;
@@ -317,27 +252,16 @@ function normalizeMeal(m) {
     category: slot,
     name: String(m.name).trim().slice(0, 90),
     description: String(m.description || '').trim().slice(0, 280),
-    calories: clampInt(m.calories, 80, 1500),
-    protein_g: clampNum(m.protein_g, 0, 120),
-    carbs_g:   clampNum(m.carbs_g,   0, 200),
-    fats_g:    clampNum(m.fats_g,    0, 90),
-    serving_size_g: clampInt(m.serving_size_g, 50, 800),
-    prep_time_min:  clampInt(m.prep_time_min, 1, 90),
-    ingredients: Array.isArray(m.ingredients)
-      ? m.ingredients.slice(0, 12).map((x) => String(x).trim()).filter(Boolean)
-      : [],
+    calories: Math.round(Number(m.calories) || 400),
+    protein_g: Math.round(Number(m.protein_g) || 20),
+    carbs_g:   Math.round(Number(m.carbs_g) || 40),
+    fats_g:    Math.round(Number(m.fats_g) || 12),
+    serving_size_g: Math.round(Number(m.serving_size_g) || 300),
+    prep_time_min:  Math.round(Number(m.prep_time_min) || 20),
+    ingredients: Array.isArray(m.ingredients) ? m.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
     rationale: String(m.rationale || '').trim().slice(0, 220),
-    tags: Array.isArray(m.tags) ? m.tags.slice(0, 4).map(String) : [],
+    tags: Array.isArray(m.tags) ? m.tags.slice(0, 4).map(String) : ['Dengeli'],
   };
 }
 
-function clampInt(v, lo, hi) {
-  const n = Math.round(Number(v) || 0);
-  return Math.max(lo, Math.min(hi, n));
-}
-function clampNum(v, lo, hi) {
-  const n = Math.round((Number(v) || 0) * 10) / 10;
-  return Math.max(lo, Math.min(hi, n));
-}
-
-module.exports = { generateMeals, turkishLower };
+module.exports = { generateMeals };

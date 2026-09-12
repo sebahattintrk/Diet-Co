@@ -35,7 +35,7 @@ export function InsightCard({ insight }: Props) {
           }}
         />
         <Text className="text-textLow text-[10px] uppercase tracking-widest">
-          FitIntel AI · Bugünkü Kararın
+          Diet-Co AI · Bugünkü Kararın
         </Text>
       </View>
 

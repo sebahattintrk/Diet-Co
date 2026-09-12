@@ -1,33 +1,76 @@
+// backend/src/routes/mealPlan.js
 const router = require('express').Router();
 const db = require('../db');
 const { generateMeals, turkishLower } = require('../services/mealGenerator');
+const { generateMedicalConstraints } = require('../services/healthFilter');
 const { GoogleGenAI } = require('@google/genai');
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
 const SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'];
 const RECENT_NAMES_TO_EXCLUDE = 16;
 
-const checkLimit = require('../middleware/checkLimit');
+// backend/src/routes/mealPlan.js
+router.get('/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const targetUserId = Number(userId) || 1;
 
-// GET /meal-plan/:userId   – returns today's plan, generating one if missing
-router.get('/:userId', async (req, res, next) => {
   try {
-    const userId = Number(req.params.userId);
-    if (!userId) return res.status(400).json({ error: 'invalid_user_id' });
-
-    const userR = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
-    if (userR.rows.length === 0) return res.status(404).json({ error: 'user_not_found' });
+    const userR = await db.query(
+      'SELECT id, name, goal, calorie_target, protein_target, carbs_target, fats_target, health_conditions, is_premium, created_at FROM users WHERE id = $1',
+      [targetUserId]
+    );
+    if (userR.rows.length === 0) {
+      return res.status(404).json({ error: 'Kullanıcı bulunamadı' });
+    }
     const user = userR.rows[0];
 
-    let planRow = await getTodayPlan(userId);
-    if (!planRow) planRow = await generatePlan(user);
+    // 14 Günlük Süre Hesabı
+    const userCreatedAt = new Date(user.created_at || Date.now());
+    const diffDays = Math.floor((Date.now() - userCreatedAt.getTime()) / (1000 * 60 * 60 * 24));
+    const trialDaysLeft = Math.max(0, 14 - diffDays);
+    const isPro = Boolean(user.is_premium);
 
-    return res.json(serializePlan(user, planRow));
-  } catch (err) { next(err); }
+    // 🛑 KİLİT KONTROLÜ: PRO değilse ve 14 gün dolduysa HİÇBİR ŞEY dönme, doğrudan 403 ver!
+    if (!isPro && diffDays > 14) {
+      return res.status(403).json({
+        error: '14 günlük ücretsiz beslenme planı süreniz doldu. Yeni öğünler için lütfen PRO üyeliğe geçin.',
+        code: 'TRIAL_EXPIRED',
+        isPro: false,
+        trialDaysLeft: 0,
+        meals: [],
+      });
+    }
+
+    const dateRes = await db.query(
+      "SELECT (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')::date AS today"
+    );
+    const today = dateRes.rows[0].today;
+
+    let planRes = await db.query(
+      'SELECT * FROM meal_plans WHERE user_id = $1 AND plan_date = $2 ORDER BY id DESC LIMIT 1',
+      [targetUserId, today]
+    );
+
+    let planData;
+    if (planRes.rows.length === 0) {
+      console.log(`\n📅 [YENİ PLAN]: ${user.name || targetUserId} için ${today} tarihi AI beslenme planı üretiliyor...\n`);
+      planData = await generatePlan(user);
+    } else {
+      planData = planRes.rows[0];
+    }
+
+    return res.status(200).json({
+      ...planData,
+      isPro,
+      trialDaysLeft,
+    });
+  } catch (error) {
+    console.error('MealPlan Hatası:', error);
+    return res.status(500).json({ error: 'Plan yüklenemedi' });
+  }
 });
 
-// POST /meal-plan/:userId/custom-slot - Kullanıcının elindeki malzemelere göre öğünü yeniden tasarlar
+// POST /meal-plan/:userId/custom-slot - Elindeki malzemelere göre güvenli öğün uyarlama
 router.post('/:userId/custom-slot', async (req, res, next) => {
   try {
     const userId = Number(req.params.userId);
@@ -40,6 +83,15 @@ router.post('/:userId/custom-slot', async (req, res, next) => {
     if (userR.rows.length === 0) return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
     const user = userR.rows[0];
 
+    const userCreatedAt = new Date(user.created_at || Date.now());
+    const diffDays = Math.floor((Date.now() - userCreatedAt.getTime()) / (1000 * 60 * 60 * 24));
+    if (!user.is_premium && diffDays > 14) {
+      return res.status(403).json({
+        error: 'Öğün uyarlama özelliği için 14 günlük deneme süreniz doldu. Lütfen PRO üyeliğe geçin.',
+        code: 'TRIAL_EXPIRED',
+      });
+    }
+
     let planRow = await getTodayPlan(userId);
     if (!planRow) planRow = await generatePlan(user);
 
@@ -47,18 +99,24 @@ router.post('/:userId/custom-slot', async (req, res, next) => {
     const targetKcal = Math.round((user.calorie_target || 2500) * (slotShare[slot] || 0.25));
     const targetPro = Math.round((user.protein_target || 120) * (slotShare[slot] || 0.25));
 
+    const medicalBlock = generateMedicalConstraints(user.health_conditions);
+
     const prompt = `
-Sen FitIntel kişisel beslenme koçusun.
+Sen Diet-Co kişisel beslenme koçusun.
 Danışanın: ${user.name} | Hedef: ${user.goal}
 Öğün: ${slot}
 Hedef Değerler: Yaklaşık ${targetKcal} kcal, ${targetPro}g Protein.
+
+${medicalBlock}
 
 Danışanın elinde bulunan malzemeler:
 "${ingredients}"
 
 GÖREV:
-Danışanının evinde bulunan bu malzemeleri (ve evdeki temel baharat, yağ, tuz, su vb.) kullanarak, onun hedefine ve kalori/protein ihtiyacına tam uyan lezzetli ve pratik 1 Türk öğünü oluştur.
-SADECE aşağıdaki JSON formatında geçerli bir JSON döndür, başka metin yazma:
+Danışanının evinde bulunan bu malzemeleri kullanarak hedefine ve makrolarına uygun 1 Türk öğünü oluştur.
+ÇOK ÖNEMLİ KURAL: Eğer kullanıcının girdiği malzemelerden herhangi biri sağlık durumuna/alerjisine aykırıysa, o zararlı malzemeyi KESİNLİKLE kullanma! Onu güvenli bir alternatifle değiştir ve 'rationale' alanında kullanıcının sağlığını korumak için bu değişikliği yaptığını nazikçe belirt.
+
+SADECE aşağıdaki JSON formatında geçerli bir JSON döndür:
 {
   "name": "Yemek Adı",
   "description": "Yemeğin kısa ve pratik hazırlanış açıklaması",
@@ -69,12 +127,12 @@ SADECE aşağıdaki JSON formatında geçerli bir JSON döndür, başka metin ya
   "serving_size_g": 300,
   "prep_time_min": 15,
   "ingredients": ["malzeme 1", "malzeme 2"],
-  "rationale": "Evdeki malzemelerinle günlük kalori ve protein dengeni bozmadan hazırlandı."
+  "rationale": "Sağlık durumuna ve hedeflerine uygun olarak uyarlandı."
 }
 `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -104,7 +162,6 @@ SADECE aşağıdaki JSON formatında geçerli bir JSON döndür, başka metin ya
   }
 });
 
-// PATCH /meal-plan/:userId/meal   body: { slot, done }
 router.patch('/:userId/meal', async (req, res, next) => {
   try {
     const userId = Number(req.params.userId);
@@ -128,7 +185,6 @@ router.patch('/:userId/meal', async (req, res, next) => {
     const cal = Math.round(Number(snap?.calories || 0));
     const pro = Math.round(Number(snap?.protein_g || 0));
 
-    // Öğün yenildiyse daily_logs'a ekle, işaret kaldırıldıysa düş
     const calDiff = done ? cal : -cal;
     const proDiff = done ? pro : -pro;
 
@@ -146,8 +202,6 @@ router.patch('/:userId/meal', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ---------- core ----------
-
 async function getTodayPlan(userId) {
   const r = await db.query(
     `SELECT * FROM meal_plans WHERE user_id = $1 AND plan_date = CURRENT_DATE`,
@@ -156,78 +210,16 @@ async function getTodayPlan(userId) {
   return r.rows[0] || null;
 }
 
-// RANDOM fallback. Disliked check now uses ILIKE across name + description (substring match).
-async function pickMeal(category, disliked, excludeId = null) {
-  const r = await db.query(
-    `SELECT * FROM meals
-       WHERE category = $1
-         AND ($2::int IS NULL OR id <> $2)
-         AND NOT EXISTS (
-           SELECT 1 FROM unnest($3::text[]) AS d
-            WHERE position(LOWER(d) IN LOWER(name)) > 0
-               OR position(LOWER(d) IN LOWER(COALESCE(description, ''))) > 0
-         )
-       ORDER BY RANDOM() LIMIT 1`,
-    [category, excludeId, disliked || []]
-  );
-  return r.rows[0];
-}
-
-// Pull recent meal names this user has been served (from either snapshot or legacy id-join).
-async function recentMealNames(userId, limit) {
-  const r = await db.query(
-    `SELECT DISTINCT name FROM (
-        SELECT
-          COALESCE(mp.breakfast_snapshot->>'name', bm.name) AS name
-          FROM meal_plans mp
-          LEFT JOIN meals bm ON bm.id = mp.breakfast_id
-         WHERE mp.user_id = $1 AND mp.plan_date >= CURRENT_DATE - INTERVAL '14 days'
-        UNION
-        SELECT COALESCE(mp.lunch_snapshot->>'name',  lm.name)
-          FROM meal_plans mp LEFT JOIN meals lm ON lm.id = mp.lunch_id
-         WHERE mp.user_id = $1 AND mp.plan_date >= CURRENT_DATE - INTERVAL '14 days'
-        UNION
-        SELECT COALESCE(mp.dinner_snapshot->>'name', dm.name)
-          FROM meal_plans mp LEFT JOIN meals dm ON dm.id = mp.dinner_id
-         WHERE mp.user_id = $1 AND mp.plan_date >= CURRENT_DATE - INTERVAL '14 days'
-        UNION
-        SELECT COALESCE(mp.snack_snapshot->>'name', sm.name)
-          FROM meal_plans mp LEFT JOIN meals sm ON sm.id = mp.snack_id
-         WHERE mp.user_id = $1 AND mp.plan_date >= CURRENT_DATE - INTERVAL '14 days'
-     ) t WHERE name IS NOT NULL
-     ORDER BY name LIMIT $2`,
-    [userId, limit]
-  );
-  return r.rows.map((row) => row.name);
-}
-
 async function generatePlan(user) {
   const exclude = await recentMealNames(user.id, RECENT_NAMES_TO_EXCLUDE);
   const aiMeals = await generateMeals({ user, excludeNames: exclude });
 
-  let bySlot = {}; // { breakfast: snapshot, ... }
+  let bySlot = {};
   let idsBySlot = { breakfast: null, lunch: null, dinner: null, snack: null };
 
   if (aiMeals && aiMeals.length === 4) {
-    // AI path — use AI meals as snapshots. We also DO-NOTHING insert into the catalog
-    // so the meals table grows for future analytics / fallback, but never overwrite
-    // an existing entry's macros (preserves historical accuracy).
     for (const m of aiMeals) {
       bySlot[m.slot] = mealToSnapshot(m, 'ai');
-    }
-    await Promise.all(aiMeals.map((m) => insertMealIfMissing(m)));
-  } else {
-    // Fallback path — pick from catalog, validated. We try up to 3 random
-    // combinations and accept the first one that hits the calorie band; if none
-    // pass, we accept the closest combination so the user still has a plan
-    // rather than nothing.
-    const fallback = await pickValidatedFallback(user);
-    for (const slot of SLOTS) {
-      const row = fallback.picked[slot];
-      if (row) {
-        idsBySlot[slot] = row.id;
-        bySlot[slot] = catalogRowToSnapshot(row, fallback.passed ? 'random' : 'random_best_effort');
-      }
     }
   }
 
@@ -260,72 +252,22 @@ async function generatePlan(user) {
   return r.rows[0];
 }
 
-// Insert into the meals catalog only if a meal with this name doesn't exist yet.
-// (Macros are preserved canonical — never overwritten.)
-async function insertMealIfMissing(m) {
-  await db.query(
-    `INSERT INTO meals (name, category, calories, protein_g, carbs_g, fats_g, description, tags,
-                        serving_size_g, prep_time_min, ingredients)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     ON CONFLICT (name) DO NOTHING`,
-    [
-      m.name, m.category, m.calories, m.protein_g, m.carbs_g, m.fats_g, m.description, m.tags,
-      m.serving_size_g ?? null,
-      m.prep_time_min ?? null,
-      m.ingredients ?? [],
-    ]
+async function recentMealNames(userId, limit) {
+  const r = await db.query(
+    `SELECT DISTINCT name FROM (
+        SELECT COALESCE(mp.breakfast_snapshot->>'name', '') AS name
+          FROM meal_plans mp WHERE mp.user_id = $1 AND mp.plan_date >= CURRENT_DATE - INTERVAL '14 days'
+        UNION
+        SELECT COALESCE(mp.lunch_snapshot->>'name', '') FROM meal_plans mp WHERE mp.user_id = $1 AND mp.plan_date >= CURRENT_DATE - INTERVAL '14 days'
+        UNION
+        SELECT COALESCE(mp.dinner_snapshot->>'name', '') FROM meal_plans mp WHERE mp.user_id = $1 AND mp.plan_date >= CURRENT_DATE - INTERVAL '14 days'
+        UNION
+        SELECT COALESCE(mp.snack_snapshot->>'name', '') FROM meal_plans mp WHERE mp.user_id = $1 AND mp.plan_date >= CURRENT_DATE - INTERVAL '14 days'
+     ) t WHERE name IS NOT NULL AND name <> ''
+     ORDER BY name LIMIT $2`,
+    [userId, limit]
   );
-}
-
-// Fallback: try up to 3 random combinations; pick the first that's within the
-// calorie band, otherwise return the closest. Better-than-nothing semantics so
-// users always get a plan even when Gemini is down.
-async function pickValidatedFallback(user) {
-  const FALLBACK_CAL_TOLERANCE = 0.10;
-  const FALLBACK_PROTEIN_MIN_RATIO = 0.85;
-  const target = Number(user.calorie_target) || 0;
-  const proteinTarget = Number(user.protein_target) || 0;
-
-  let bestCombo = null;
-  let bestDistance = Infinity;
-
-  const prev = await getTodayPlan(user.id);
-  const exId = {
-    breakfast: prev?.breakfast_id ?? null,
-    lunch:     prev?.lunch_id     ?? null,
-    dinner:    prev?.dinner_id    ?? null,
-    snack:     prev?.snack_id     ?? null,
-  };
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const [b, l, d, s] = await Promise.all([
-      pickMeal('breakfast', user.disliked_foods, exId.breakfast),
-      pickMeal('lunch',     user.disliked_foods, exId.lunch),
-      pickMeal('dinner',    user.disliked_foods, exId.dinner),
-      pickMeal('snack',     user.disliked_foods, exId.snack),
-    ]);
-    const combo = { breakfast: b, lunch: l, dinner: d, snack: s };
-    const rows = Object.values(combo).filter(Boolean);
-    if (rows.length < 4) continue;
-
-    const totalCal = rows.reduce((s, r) => s + Number(r.calories || 0), 0);
-    const totalPro = rows.reduce((s, r) => s + Number(r.protein_g || 0), 0);
-
-    const calOK = target === 0 ||
-      (totalCal >= target * (1 - FALLBACK_CAL_TOLERANCE) &&
-       totalCal <= target * (1 + FALLBACK_CAL_TOLERANCE));
-    const proOK = proteinTarget === 0 || totalPro >= proteinTarget * FALLBACK_PROTEIN_MIN_RATIO;
-
-    if (calOK && proOK) {
-      return { picked: combo, passed: true, totals: { cal: totalCal, pro: totalPro } };
-    }
-    const distance = Math.abs(totalCal - target) + Math.abs(totalPro - proteinTarget);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestCombo = combo;
-    }
-  }
-  return { picked: bestCombo || {}, passed: false };
+  return r.rows.map((row) => row.name);
 }
 
 function mealToSnapshot(m, source) {
@@ -348,28 +290,6 @@ function mealToSnapshot(m, source) {
   };
 }
 
-function catalogRowToSnapshot(row, source) {
-  return {
-    slot: row.category,
-    category: row.category,
-    name: row.name,
-    description: row.description,
-    calories: Number(row.calories),
-    protein_g: Number(row.protein_g),
-    carbs_g: Number(row.carbs_g),
-    fats_g: Number(row.fats_g),
-    tags: row.tags || [],
-    image_url: row.image_url || null,
-    serving_size_g: row.serving_size_g != null ? Number(row.serving_size_g) : null,
-    prep_time_min:  row.prep_time_min  != null ? Number(row.prep_time_min)  : null,
-    ingredients:    Array.isArray(row.ingredients) ? row.ingredients : [],
-    rationale:      null,  // catalog rows don't carry rationale
-    source,
-  };
-}
-
-// ---------- response shaping ----------
-
 function totalsFor(meals) {
   return meals.reduce(
     (acc, m) => ({
@@ -389,8 +309,6 @@ function serializePlan(user, planRow) {
       const done = !!planRow[`${slot}_done`];
       const id   = planRow[`${slot}_id`];
       if (!snap) return null;
-      // Frontend keys off `id`; for AI meals without an id we synthesize one from plan+slot
-      // so React keys stay stable. -planRow.id ensures it never collides with real meal ids.
       const effectiveId = id != null ? id : -(planRow.id * 10 + SLOTS.indexOf(slot));
       return {
         slot,
@@ -404,7 +322,6 @@ function serializePlan(user, planRow) {
         fats_g:    snap.fats_g,
         image_url: snap.image_url || '',
         tags: snap.tags || [],
-        // v2 — practical metadata
         serving_size_g: snap.serving_size_g ?? null,
         prep_time_min:  snap.prep_time_min  ?? null,
         ingredients:    Array.isArray(snap.ingredients) ? snap.ingredients : [],

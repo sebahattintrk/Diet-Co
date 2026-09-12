@@ -34,7 +34,7 @@ async function estimateMealFromPhoto({ filePath }) {
   const img = readImage(filePath);
   if (!img) return { source: 'error', estimate: null, error: 'photo_not_readable' };
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt();
@@ -96,7 +96,7 @@ async function estimateMealFromPhoto({ filePath }) {
 
 function buildPrompt() {
   return [
-    'Sen FitIntel uygulamasının fotoğraflı öğün tahmini motorusun. Sana bir yemek fotoğrafı verildi. Görseldeki yemeği tanımla ve TAHMİNİ makro değerlerini ver.',
+    'Sen Diet-Co uygulamasının fotoğraflı öğün tahmini motorusun. Sana bir yemek fotoğrafı verildi. Görseldeki yemeği tanımla ve TAHMİNİ makro değerlerini ver.',
     '',
     'KESİN KURALLAR:',
     '- Bu KESİN değil, TAHMİNİ. notes alanında belirsizlik kaynaklarını söyle (örn. "porsiyon büyüklüğü göründüğü kadar varsayıldı", "sos görünmüyor, içermeyebilir").',

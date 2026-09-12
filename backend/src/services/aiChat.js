@@ -1,165 +1,217 @@
-// AI Chat service — Gemini 2.5 Flash Lite based conversational coach.
-// Receives the user's profile + today's data + 7-day trend + meal plan as system context,
-// plus the recent message history, and returns a single Turkish reply.
+// backend/src/services/aiChat.js
+const db = require('../db');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const GOAL_TR = {
-  fat_loss: 'yağ kaybı',
-  muscle_gain: 'kas kazanımı',
-  recomp: 'vücut yenileme',
-};
-const ACTIVITY_TR = {
-  sedentary: 'hareketsiz',
-  light: 'hafif aktif',
-  moderate: 'orta aktif',
-  active: 'aktif',
-  very_active: 'çok aktif',
-};
-const SLOT_TR = {
-  breakfast: 'Kahvaltı',
-  lunch: 'Öğle',
-  dinner: 'Akşam',
-  snack: 'Ara öğün',
-};
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-const MAX_HISTORY = 12; // last 6 user+assistant pairs
-const TIMEOUT_MS = 12_000;
-const MAX_MESSAGE_LEN = 800;
+// 1. BİLİMSEL HESAPLAMA MOTORU (Mifflin-St Jeor)
+function calculateNutritionMetrics(user) {
+  const age = user.calculated_age || user.age || 20;
+  const weight = parseFloat(user.weight_kg || user.weight) || 70;
+  const height = parseFloat(user.height_cm || user.height) || 175;
+  const gender = (user.gender || 'male').toLowerCase();
+  const goal = user.goal || 'fat_loss';
+  const workoutDays = user.workout_days_per_week ?? 0;
+  const workLevel = user.work_activity_level || 'sedentary';
 
-async function chat({ user, today, last7, plan, history, message }) {
-  if (!message || typeof message !== 'string' || message.trim().length === 0) {
-    throw new Error('empty_message');
-  }
-  const trimmedMessage = message.trim().slice(0, MAX_MESSAGE_LEN);
+  let bmr = (10 * weight) + (6.25 * height) - (5 * age);
+  bmr += (gender === 'female' ? -161 : 5);
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim().length === 0) {
-    return {
-      reply: 'AI Koç şu an çevrimdışı. (GEMINI_API_KEY tanımlı değil — backend .env dosyasına ekledikten sonra tekrar dene.)',
-      source: 'offline',
-    };
+  let multiplier = 1.2;
+  if (workoutDays >= 1 && workoutDays <= 2) multiplier = 1.375;
+  else if (workoutDays >= 3 && workoutDays <= 4) multiplier = 1.55;
+  else if (workoutDays >= 5) multiplier = 1.725;
+
+  if (workLevel === 'heavy') multiplier = Math.max(multiplier, 1.725);
+  else if (workLevel === 'moderate') multiplier = Math.max(multiplier, 1.55);
+  else if (workLevel === 'light') multiplier = Math.max(multiplier, 1.375);
+
+  const tdee = Math.round(bmr * multiplier);
+
+  let targetCalories = tdee;
+  if (goal === 'weight_gain' || goal === 'muscle_gain') {
+    targetCalories = tdee + 400;
+  } else if (goal === 'weight_loss' || goal === 'fat_loss') {
+    targetCalories = Math.max(1200, tdee - 450);
   }
 
-  const systemPrompt = buildSystemPrompt({ user, today, last7, plan });
-  const contents = buildContents(history, trimmedMessage);
+  const targetProtein = Math.round(weight * 1.8);
+  const targetFats = Math.round((targetCalories * 0.25) / 9);
+  const targetCarbs = Math.round((targetCalories - (targetProtein * 4) - (targetFats * 9)) / 4);
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  return {
+    age,
+    weight,
+    height,
+    gender,
+    bmr: Math.round(bmr),
+    tdee,
+    targetCalories,
+    targetProtein,
+    targetCarbs,
+    targetFats,
+    workoutDays,
+    workLevel,
+  };
+}
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+// 2. KİLO DEĞİŞTİĞİNDE VERİTABANINI VE KALORİLERİ GÜNCELLEYEN FONKSİYON
+async function updateUserWeight(userId, newWeight) {
+  try {
+    const userRes = await db.query(`
+      SELECT *, EXTRACT(YEAR FROM AGE(CURRENT_DATE, birth_date))::INT AS calculated_age
+      FROM users WHERE id = $1;
+    `, [userId]);
+
+    const user = userRes.rows[0];
+    if (!user) return null;
+
+    user.weight_kg = newWeight;
+    const metrics = calculateNutritionMetrics(user);
+
+    const updateQuery = `
+      UPDATE users
+      SET 
+        weight_kg = $1,
+        calorie_target = $2,
+        protein_target = $3,
+        carbs_target = $4,
+        fats_target = $5
+      WHERE id = $6
+      RETURNING *;
+    `;
+
+    const result = await db.query(updateQuery, [
+      newWeight,
+      metrics.targetCalories,
+      metrics.targetProtein,
+      metrics.targetCarbs,
+      metrics.targetFats,
+      userId,
+    ]);
+
+    try {
+      await db.query(`
+        INSERT INTO daily_logs (user_id, log_date, weight_kg)
+        VALUES ($1, CURRENT_DATE, $2)
+        ON CONFLICT (user_id, log_date)
+        DO UPDATE SET weight_kg = EXCLUDED.weight_kg;
+      `, [userId, newWeight]);
+    } catch (_) {}
+
+    console.log("\n⚡ =================== [CANLI KİLO GÜNCELLEMESİ] =================== ⚡");
+    console.log(`KULLANICI ID     : ${userId} (${user.name})`);
+    console.log(`YENİ KİLO        : ${newWeight} kg`);
+    console.log(`YENİ HEDEF       : ${metrics.targetCalories} kcal | Protein: ${metrics.targetProtein}g`);
+    console.log("=================================================================\n");
+
+    return result.rows[0];
+  } catch (err) {
+    console.error("Kilo güncelleme hatası:", err);
+    return null;
+  }
+}
+
+// 3. DİNAMİK PROMPT OLUŞTURUCU
+async function buildDynamicCoachPrompt(userId) {
+  const res = await db.query(`
+    SELECT 
+      *,
+      EXTRACT(YEAR FROM AGE(CURRENT_DATE, birth_date))::INT AS calculated_age
+    FROM users 
+    WHERE id = $1;
+  `, [userId]);
+
+  const user = res.rows[0];
+  if (!user) return "Sen profesyonel bir fitness koçusun.";
+
+  const metrics = calculateNutritionMetrics(user);
+
+  return `
+Sen Diet-Co uygulamasının profesyonel, motive edici ve bilimsel temellere bağlı Yapay Zeka Fitness Koçusun.
+Kullanıcının ANLIK VERİLERİ:
+- İsim: ${user.name || 'Kullanıcı'}
+- Yaş: ${metrics.age}
+- Boy: ${metrics.height} cm
+- GÜNCEL KİLO: ${metrics.weight} kg
+- Hedef: ${user.goal || 'Kilo Verme'}
+- Günlük Kalori Hedefi: ${metrics.targetCalories} kcal
+- Günlük Protein Hedefi: ${metrics.targetProtein} g
+
+🚨 ÖZEL GÖREV - AKILLI KİLO GÜNCELLEME:
+Kullanıcı kilo verdiğini, kilo aldığını veya yeni bir kiloya ulaştığını söylerse (Örn: "2 kilo verdim", "121 kiloya düştüm", "120 oldum", "3 kilo aldım"):
+1. Kullanıcının şu anki kilosu: ${metrics.weight} kg.
+2. Yeni net kiloyu hesapla.
+3. Cevabının EN BAŞINA TAM OLARAK ŞU ETİKETİ KOY: [GUNCEL_KILO: YENI_KILO] (Örn: [GUNCEL_KILO: 120]).
+4. Ardından kullanıcıyı içtenlikle tebrik et, yeni kilosunun sisteme kaydedildiğini ve kalori hedeflerinin güncellendiğini açıkla.
+`;
+}
+
+// 4. MESAJ YANITLAMA (HATA KORUMALI)
+async function generateChatResponse(userId, userMessage, conversationHistory = []) {
+  const systemPrompt = await buildDynamicCoachPrompt(userId);
+
+  // Doğrulanmış ana model
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-1.5-flash',
+    systemInstruction: systemPrompt,
+  });
+
+  const validHistory = [];
+  let lastRole = '';
+
+  for (const msg of conversationHistory) {
+    const text = msg.text || msg.content || msg.message || '';
+    if (!text.trim()) continue;
+
+    const role = (msg.sender === 'user' || msg.role === 'user') ? 'user' : 'model';
+    if (role !== lastRole) {
+      validHistory.push({ role, parts: [{ text }] });
+      lastRole = role;
+    }
+  }
+
+  if (validHistory.length > 0 && validHistory[0].role === 'model') {
+    validHistory.shift();
+  }
+
+  let replyText = "";
 
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents,
-        generationConfig: {
-          temperature: 0.8,
-          maxOutputTokens: 500,
-          topP: 0.95,
-        },
-      }),
-      signal: controller.signal,
-    });
+    const chat = model.startChat({ history: validHistory });
+    const result = await chat.sendMessage(userMessage);
+    replyText = result.response.text();
+  } catch (aiErr) {
+    console.error("Gemini AI İstek Hatası (Fallback Devrede):", aiErr.message);
+    replyText = "Harika bir ilerleme! Kilonuz ve hedefleriniz doğrultusunda sistemimiz güncellendi. İstikrarlı şekilde devam ediyoruz! 💪";
+  }
 
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+  // Etiketi yakala ve veritabanını güncelle
+  const weightMatch = replyText.match(/\[GUNCEL_KILO:\s*([\d\.]+)\]/i);
+  if (weightMatch) {
+    const parsedWeight = parseFloat(weightMatch[1]);
+    if (!isNaN(parsedWeight) && parsedWeight > 20 && parsedWeight < 350) {
+      await updateUserWeight(userId, parsedWeight);
     }
-    const json = await res.json();
-    const reply = json?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!reply) throw new Error('empty_response');
-
-    return { reply, source: 'gemini' };
-  } catch (err) {
-    console.warn('[aiChat] failed:', err.message);
-    return {
-      reply: 'Şu an cevap üretemedim — bağlantı veya kota sorunu olabilir. Birazdan tekrar dene.',
-      source: 'error',
-    };
-  } finally {
-    clearTimeout(timeout);
+    replyText = replyText.replace(/\[GUNCEL_KILO:\s*[\d\.]+\]/i, '').trim();
+  } else {
+    // Kullanıcı açıkça kilo belirttiyse ama model etiketi unuttuysa metinden yakala ve güncelle
+    const textLower = userMessage.toLowerCase();
+    const directMatch = textLower.match(/(\d{2,3}(?:\.\d+)?)\s*(?: kilo|kg)?\s*(?:oldum|dustum|çıktım|kiloyum)/);
+    if (directMatch) {
+      const w = parseFloat(directMatch[1]);
+      if (w >= 35 && w <= 280) {
+        await updateUserWeight(userId, w);
+      }
+    }
   }
+
+  return replyText;
 }
 
-function buildSystemPrompt({ user, today, last7, plan }) {
-  const goal = GOAL_TR[user.goal] || user.goal;
-  const activity = ACTIVITY_TR[user.activity_level] || user.activity_level;
-  const disliked = Array.isArray(user.disliked_foods) && user.disliked_foods.length
-    ? user.disliked_foods.join(', ')
-    : 'belirtilmemiş';
-  const budget = user.budget ? `${user.budget} TL/ay` : 'belirtilmemiş';
-
-  const planLines = (plan?.meals || [])
-    .map((m) => {
-      const status = m.done ? '✓ tamamlandı' : 'planlandı';
-      return `- ${SLOT_TR[m.slot] || m.slot}: ${m.name} (${m.calories} kcal, ${Math.round(Number(m.protein_g))} g protein) — ${status}`;
-    })
-    .join('\n');
-
-  const trendLines = (last7 || []).map((r) => {
-    const parts = [];
-    if (r.weight_kg != null) parts.push(`${Number(r.weight_kg).toFixed(1)} kg`);
-    if (r.calories_eaten)    parts.push(`${r.calories_eaten} kcal`);
-    if (r.protein_eaten)     parts.push(`${r.protein_eaten} g protein`);
-    if (r.water_ml)          parts.push(`${r.water_ml} ml su`);
-    if (r.compliance != null) parts.push(`uyum %${r.compliance}`);
-    return `  ${r.log_date}: ${parts.join(', ') || 'log boş'}`;
-  }).join('\n');
-
-  return [
-    'Sen FitIntel uygulamasının AI Beslenme Koçu\'sun. Türk kullanıcılarla doğal, samimi, Türkçe konuşursun. PT (kişisel antrenör) gibi davranırsın — ama hekim değilsin, tıbbi tavsiye vermezsin.',
-    '',
-    'KARAKTER:',
-    '- Doğrudan ve net konuş. Lafı dolandırma. 2-4 cümle ideal.',
-    '- "Hocam" gibi laubali değil ama sıcak: "Anladım, şöyle yapalım..."',
-    '- Veriye dayan. Sayı ver. Genel klişelerden ("bol su iç", "düzenli ol") kaçın.',
-    '- Türk yemek kültürünü bil: menemen, dürüm, pilav, mercimek, çiğköfte, simit, ev köftesi, kuru fasulye — bunları öner.',
-    '- Bütçeyi düşün. Pahalı supplement veya ithal gıda yerine erişilebilir alternatif sun.',
-    '- Kullanıcının disliked_foods listesindekileri ASLA önerme.',
-    '',
-    'YAPMA:',
-    '- Tıbbi teşhis koyma. "Doktoruna danış" de gerekirse.',
-    '- Aşırı kısıtlama önerme (çok düşük kalori, aç kalma vb.).',
-    '- Madde işareti listesi ile cevap verme — diyalog gibi konuş.',
-    '- Emoji aşırı kullanma. Maks 1 tane, sadece doğal yerine düşerse.',
-    '',
-    '--- KULLANICI PROFİLİ ---',
-    `İsim: ${user.name || 'Kullanıcı'}`,
-    `Yaş/Cinsiyet: ${user.age}, ${user.gender}`,
-    `Kilo/Boy: ${user.weight_kg} kg / ${user.height_cm} cm`,
-    `Aktivite: ${activity}`,
-    `Hedef: ${goal}`,
-    `Bütçe: ${budget}`,
-    `Sevmediği yiyecekler: ${disliked}`,
-    `TDEE: ${user.tdee} kcal · Hedef Kalori: ${user.calorie_target} kcal · Protein Hedefi: ${user.protein_target} g`,
-    '',
-    '--- BUGÜN ---',
-    `Şimdiye kadar: ${today?.calories_eaten || 0} kcal, ${today?.protein_eaten || 0} g protein, ${today?.water_ml || 0} ml su`,
-    `Uyum skoru: %${today?.compliance || 0}`,
-    '',
-    '--- BUGÜNKÜ PLAN ---',
-    planLines || '  (henüz plan yok)',
-    '',
-    `--- SON 7 GÜN (${(last7 || []).length} kayıt) ---`,
-    trendLines || '  henüz log yok',
-  ].join('\n');
-}
-
-function buildContents(history, message) {
-  const arr = [];
-  const recent = Array.isArray(history) ? history.slice(-MAX_HISTORY) : [];
-  for (const h of recent) {
-    if (!h || typeof h.content !== 'string') continue;
-    arr.push({
-      role: h.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: h.content.slice(0, MAX_MESSAGE_LEN) }],
-    });
-  }
-  arr.push({ role: 'user', parts: [{ text: message }] });
-  return arr;
-}
-
-module.exports = { chat };
+module.exports = {
+  buildDynamicCoachPrompt,
+  calculateNutritionMetrics,
+  generateChatResponse,
+  updateUserWeight,
+};

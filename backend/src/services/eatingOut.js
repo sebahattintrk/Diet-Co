@@ -41,7 +41,7 @@ async function recommendEatingOut({ user, venue, remainingCal, remainingProtein 
     return { error: 'ai_offline' };
   }
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, venue, remainingCal, remainingProtein);
@@ -98,7 +98,7 @@ function buildPrompt(user, venueKey, remainingCal, remainingProtein) {
     : 'yok';
 
   return [
-    'Sen FitIntel uygulamasının "Dışarıda Ne Yiyeyim?" motorusun. Kullanıcı şu an dışarıda yemek seçecek; ona TEK bir sipariş önerisi vereceksin.',
+    'Sen Diet-Co uygulamasının "Dışarıda Ne Yiyeyim?" motorusun. Kullanıcı şu an dışarıda yemek seçecek; ona TEK bir sipariş önerisi vereceksin.',
     '',
     `MEKAN TÜRÜ: ${venueDesc}`,
     '',

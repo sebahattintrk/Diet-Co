@@ -1,28 +1,36 @@
 {
   "expo": {
-    "name": "FitIntel",
-    "slug": "fitintel",
-    "version": "0.1.0",
+    "name": "Diet-Co",
+    "slug": "diet-co",
+    "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "scheme": "fitintel",
+    "icon": "./assets/Diet-Co-icon.png",
+    "scheme": "dietco",
     "userInterfaceStyle": "light",
     "newArchEnabled": false,
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/Diet-Co-Splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#F8FAF8"
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.fitintel.app"
+      "bundleIdentifier": "com.dietco.app",
+      "buildNumber": "1",
+      "icon": "./assets/Diet-Co-icon.png",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Öğünlerinizin fotoğrafını çekip kalori ve besin değerlerini analiz etmek için kamera erişimi gereklidir.",
+        "NSPhotoLibraryUsageDescription": "Galerinizdeki yemek fotoğraflarını seçip analiz etmek için fotoğraf erişimi gereklidir."
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/Diet-Co-Adaptive-icon.png",
         "backgroundColor": "#F8FAF8"
       },
-      "package": "com.fitintel.app"
+      "package": "com.dietco.app",
+      "versionCode": 1,
+      "softwareKeyboardLayoutMode": "resize"
     }
   }
 }

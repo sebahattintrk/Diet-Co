@@ -63,7 +63,7 @@ async function narrate(user, metrics) {
     return { ...fallbackNarration(user, metrics), source: 'rule_engine' };
   }
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, metrics);
@@ -108,7 +108,7 @@ async function narrate(user, metrics) {
 
 function buildPrompt(user, m) {
   return [
-    'Sen FitIntel uygulamasının haftalık rapor yorumlayıcısısın. Aşağıdaki METRİKLER kesindir — değiştirmeyeceksin, sadece anlatacaksın.',
+    'Sen Diet-Co uygulamasının haftalık rapor yorumlayıcısısın. Aşağıdaki METRİKLER kesindir — değiştirmeyeceksin, sadece anlatacaksın.',
     '',
     `Kullanıcı: ${user.name || 'kullanıcı'}, hedef: ${user.goal}`,
     'METRİKLER:',

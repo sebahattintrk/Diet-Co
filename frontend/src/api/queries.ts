@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import { useUserStore } from '../store/userStore';
 
 // ---------- types ----------
 export type Goal = 'fat_loss' | 'muscle_gain' | 'recomp';
@@ -103,7 +104,7 @@ export type Meal = {
 export type MealPlan = {
   date: string;
   targets: { calories: number; protein: number; carbs: number; fats: number };
-  totals:  { calories: number; protein: number; carbs: number; fats: number };
+  totals: { calories: number; protein: number; carbs: number; fats: number };
   meals: Meal[];
 };
 
@@ -231,10 +232,17 @@ export function useToggleMealDone(userId: number | null) {
 export type ChatRole = 'user' | 'assistant';
 export type ChatMessage = { role: ChatRole; content: string };
 
+export type ChatResponse = {
+  reply: string;
+  user?: User;
+  loggedItem?: any;
+};
+
 export function useChat(userId: number | null) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (vars: { message: string; history?: ChatMessage[] }) => {
-      const { data } = await api.post<{ reply: string }>(
+      const { data } = await api.post<ChatResponse>(
         '/api/chat',
         {
           message: vars.message,
@@ -244,23 +252,14 @@ export function useChat(userId: number | null) {
       );
       return data;
     },
-  });
-}
-
-export function useSupplements(category?: string) {
-  return useQuery({
-    queryKey: ['supplements', category ?? 'all'],
-    queryFn: async () =>
-      (await api.get<Supplement[]>('/supplements', { params: { category } })).data,
-  });
-}
-
-export function useSupplementDetail(id: number | null) {
-  return useQuery({
-    queryKey: ['supplement', id],
-    enabled: !!id,
-    queryFn: async () =>
-      (await api.get<SupplementDetail>(`/supplements/${id}`)).data,
+    onSuccess: (data) => {
+      // Backend'den güncel user döndüğünde Profil ve Ana Sayfayı o salise güncelle
+      if (data?.user) {
+        useUserStore.getState().setUser(data.user);
+        qc.invalidateQueries({ queryKey: ['dashboard'] });
+        qc.invalidateQueries({ queryKey: ['meal-plan'] });
+      }
+    },
   });
 }
 
@@ -300,7 +299,7 @@ export function useUploadProgressPhoto(userId: number | null) {
         type: 'image/jpeg',
       } as unknown as Blob);
       if (vars.waist_cm != null) form.append('waist_cm', String(vars.waist_cm));
-      if (vars.notes)            form.append('notes', vars.notes);
+      if (vars.notes) form.append('notes', vars.notes);
       const { data } = await api.post<ProgressPhoto>(
         `/progress-photos/${userId}`,
         form,
@@ -378,7 +377,7 @@ export type PlanAdjustment = {
   reason_tr: string;
   action_tr: string;
   confidence: 'low' | 'medium' | 'high';
-  current:   { calorie_target: number; protein_target: number };
+  current: { calorie_target: number; protein_target: number };
   suggested: { calorie_target: number; protein_target: number };
   calorie_delta: number;
   protein_delta: number;
@@ -550,27 +549,27 @@ export function usePlanRationale(userId: number | null, enabled = true) {
 // ---------- Goal simulation (premium) ----------
 export type GoalSimulation =
   | {
-      state: 'insufficient_data' | 'no_target' | 'reached' | 'wrong_direction';
-      message?: string;
-      samples_count?: number;
-      current_weight_kg?: number;
-      target_weight_kg?: number | null;
-      velocity_per_week_kg?: number;
-    }
+    state: 'insufficient_data' | 'no_target' | 'reached' | 'wrong_direction';
+    message?: string;
+    samples_count?: number;
+    current_weight_kg?: number;
+    target_weight_kg?: number | null;
+    velocity_per_week_kg?: number;
+  }
   | {
-      state: 'projecting';
-      current_weight_kg: number;
-      target_weight_kg: number;
-      velocity_per_week_kg: number;
-      remaining_kg: number;
-      weeks_at_current_pace: number | null;
-      eta_date: string | null;
-      weeks_if_better: number | null;
-      weeks_if_slower: number | null;
-      samples_count: number;
-      days_window: number;
-      confidence: 'low' | 'medium' | 'high';
-    };
+    state: 'projecting';
+    current_weight_kg: number;
+    target_weight_kg: number;
+    velocity_per_week_kg: number;
+    remaining_kg: number;
+    weeks_at_current_pace: number | null;
+    eta_date: string | null;
+    weeks_if_better: number | null;
+    weeks_if_slower: number | null;
+    samples_count: number;
+    days_window: number;
+    confidence: 'low' | 'medium' | 'high';
+  };
 export function useGoalSimulation(userId: number | null, enabled = true) {
   return useQuery({
     queryKey: ['goal-simulation', userId],

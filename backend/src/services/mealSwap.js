@@ -42,7 +42,7 @@ async function suggestSwap({ user, slot, currentMeal, reason }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim().length === 0) return null;
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, slot, currentMeal, reason);
@@ -117,7 +117,7 @@ function buildPrompt(user, slot, currentMeal, reason) {
     : 'yok';
 
   return [
-    'Sen FitIntel uygulamasının "Öğün Değiştir" motorusun. Kullanıcı belirli bir öğünü değiştirmek istiyor; ona TAM 3 alternatif Türk yemeği önereceksin.',
+    'Sen Diet-Co uygulamasının "Öğün Değiştir" motorusun. Kullanıcı belirli bir öğünü değiştirmek istiyor; ona TAM 3 alternatif Türk yemeği önereceksin.',
     '',
     `--- DEĞİŞTİRİLECEK ÖĞÜN (${slotLabel}) ---`,
     `Ad: ${currentMeal.name}`,

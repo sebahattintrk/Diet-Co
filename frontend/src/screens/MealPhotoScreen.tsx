@@ -213,7 +213,7 @@ export function MealPhotoScreen() {
             ⚠ NASIL ÇALIŞIR
           </Text>
           <Text style={{ color: colors.textMid, fontSize: 12, lineHeight: 17, marginTop: 4 }}>
-            FitIntel tahmini değer üretir, kesin tartı değildir. Hassasiyet gerekiyorsa
+            Diet-Co tahmini değer üretir, kesin tartı değildir. Hassasiyet gerekiyorsa
             kendi düzeltmeni gir — sistem zamanla öğrenir.
           </Text>
         </View>

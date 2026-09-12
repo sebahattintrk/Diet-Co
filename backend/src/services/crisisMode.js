@@ -80,7 +80,7 @@ async function geminiSuggestion(user, kind, base, remainingCal, remainingProtein
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim().length === 0) return null;
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const disliked = Array.isArray(user.disliked_foods) && user.disliked_foods.length
@@ -88,7 +88,7 @@ async function geminiSuggestion(user, kind, base, remainingCal, remainingProtein
     : 'yok';
 
   const prompt = [
-    'Sen FitIntel uygulamasının "Kriz Modu" yardımcısısın. Kullanıcı şu durumda:',
+    'Sen Diet-Co uygulamasının "Kriz Modu" yardımcısısın. Kullanıcı şu durumda:',
     `- Durum: ${base.title}`,
     `- Bugünün kalan kalorisi: ~${remainingCal} kcal`,
     `- Bugünün kalan proteini: ~${remainingProtein} g`,

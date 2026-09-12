@@ -1,87 +1,100 @@
+// backend/src/routes/dashboard.js
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
+// GET /api/dashboard?userId=...
 router.get('/', async (req, res) => {
+  const targetUserId = Number(req.query.userId || req.user?.id);
+
+  if (!targetUserId || isNaN(targetUserId)) {
+    return res.status(400).json({ error: 'userId belirtilmedi.' });
+  }
+
   try {
-    // 1. Kullanıcı bilgilerini al
-    const userRes = await db.query('SELECT * FROM users ORDER BY id DESC LIMIT 1');
+    // 1. users tablosundaki net sütunları güvenli şekilde çek
+    const userRes = await db.query(
+      `SELECT * FROM users WHERE id = $1`,
+      [targetUserId]
+    );
+
     if (userRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Kayıtlı kullanıcı bulunamadı.' });
+      return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
     }
+
     const user = userRes.rows[0];
 
-    // 2. food_logs tablosundan BUGÜN tüketilen gerçek makroları topla
-    const foodSummaryRes = await db.query(`
-      SELECT 
-        COALESCE(SUM(calories), 0)::int AS total_calories,
-        COALESCE(SUM(protein_g), 0)::numeric(6,1) AS total_protein,
-        COALESCE(SUM(carbs_g), 0)::numeric(6,1) AS total_carbs,
-        COALESCE(SUM(fats_g), 0)::numeric(6,1) AS total_fats
-      FROM food_logs
-      WHERE user_id = $1 AND log_date = CURRENT_DATE
-    `, [user.id]);
+    // 2. daily_logs tablosundan bugünün loglarını çek
+    let userLog = {
+      water_consumed: 0,
+      calories_consumed: 0,
+      protein_consumed: 0,
+    };
 
-    const eaten = foodSummaryRes.rows[0];
+    try {
+      const logRes = await db.query(
+        `SELECT COALESCE(water_ml, 0) AS water_consumed,
+                COALESCE(calories_eaten, 0) AS calories_consumed,
+                COALESCE(protein_eaten, 0) AS protein_consumed
+         FROM daily_logs
+         WHERE user_id = $1 
+           AND (log_date = CURRENT_DATE OR log_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')::date)
+         LIMIT 1`,
+        [targetUserId]
+      );
 
-    // 3. Su takibini daily_logs tablosundan al
-    const logRes = await db.query(
-      'SELECT water_ml FROM daily_logs WHERE user_id = $1 AND log_date = CURRENT_DATE',
-      [user.id]
-    );
-    const waterMl = logRes.rows[0]?.water_ml || 0;
+      if (logRes.rows.length > 0) {
+        userLog = logRes.rows[0];
+      }
+    } catch (logErr) {
+      console.warn('daily_logs sorgu uyarısı (sıfır kabul ediliyor):', logErr.message);
+    }
 
-    // 4. Kalan hedefler
-    const remainingKcal = Math.max(0, user.calorie_target - eaten.total_calories);
-    const remainingProtein = Math.max(0, Number(user.protein_target) - Number(eaten.total_protein));
-
-    const aiRecommendation = remainingKcal > 0
-      ? `Bugün hedefine ${remainingKcal} kcal ve ${remainingProtein.toFixed(1)}g protein kaldı. Tempoyu koru!`
-      : 'Tebrikler! Bugünün kalori hedefini başarıyla tamamladın.';
-
-    return res.status(200).json({
-      caloriesTarget: user.calorie_target,
-      caloriesConsumed: eaten.total_calories,
-      caloriesRemaining: remainingKcal,
-      proteinTarget: user.protein_target,
-      proteinConsumed: Number(eaten.total_protein),
-      carbsTarget: user.carbs_target || 350,
-      carbsConsumed: Number(eaten.total_carbs),
-      fatTarget: user.fats_target || 52,
-      fatConsumed: Number(eaten.total_fats),
-      waterTargetLiters: 3.0,
-      waterDrankLiters: (waterMl / 1000).toFixed(1),
-      streakDays: 1,
-      aiRecommendation,
+    return res.json({
+      user, // users tablosundan gelen canlı 55.00 kg verisi
+      waterConsumed: Number(userLog.water_consumed || 0),
+      caloriesConsumed: Number(userLog.calories_consumed || 0),
+      proteinConsumed: Number(userLog.protein_consumed || 0),
+      caloriesTarget: Number(user.calorie_target || 2200),
+      proteinTarget: Number(user.protein_target || 120),
+      carbsTarget: Number(user.carbs_target || 250),
+      fatTarget: Number(user.fats_target || 70),
     });
-  } catch (error) {
-    console.error('Dashboard DB Error:', error);
-    return res.status(500).json({ error: 'Dashboard verileri alınamadı: ' + error.message });
+  } catch (err) {
+    console.error('Dashboard getirme kritik hatası:', err);
+    return res.status(500).json({ error: 'Dashboard verisi alınamadı: ' + err.message });
   }
 });
 
-// Su Ekleme Endpoint'i (+250ml)
-router.post('/water', async (req, res) => {
+// POST /api/dashboard/water/add veya /api/water/add
+router.post('/water/add', async (req, res) => {
   try {
-    const userRes = await db.query('SELECT id FROM users ORDER BY id DESC LIMIT 1');
-    if (userRes.rows.length === 0) return res.status(404).json({ error: 'Kullanıcı yok' });
+    const { userId, amount = 250 } = req.body;
+    const targetUserId = Number(userId);
 
-    const userId = userRes.rows[0].id;
-    await db.query(`
-      INSERT INTO daily_logs (user_id, log_date, water_ml)
-      VALUES ($1, CURRENT_DATE, 250)
-      ON CONFLICT (user_id, log_date)
-      DO UPDATE SET water_ml = daily_logs.water_ml + 250;
-    `, [userId]);
+    if (!targetUserId) {
+      return res.status(400).json({ error: 'userId zorunludur' });
+    }
 
-    const updated = await db.query(
-      'SELECT water_ml FROM daily_logs WHERE user_id = $1 AND log_date = CURRENT_DATE',
-      [userId]
+    const result = await db.query(
+      `INSERT INTO daily_logs (user_id, log_date, water_ml)
+       VALUES ($1, CURRENT_DATE, $2)
+       ON CONFLICT (user_id, log_date)
+       DO UPDATE SET water_ml = COALESCE(daily_logs.water_ml, 0) + EXCLUDED.water_ml
+       RETURNING water_ml;`,
+      [targetUserId, parseInt(amount, 10)]
     );
 
-    return res.json({ success: true, waterDrankLiters: (updated.rows[0].water_ml / 1000).toFixed(1) });
+    const updatedWater = Number(result.rows[0]?.water_ml || 0);
+
+    return res.json({
+      success: true,
+      water_ml: updatedWater,
+      waterConsumed: updatedWater,
+    });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('Su ekleme hatası:', err);
+    return res.status(500).json({ error: 'Su kaydedilemedi: ' + err.message });
   }
 });
 

@@ -1,64 +1,71 @@
-const jwt = require('jsonwebtoken');
+// backend/src/middleware/checkLimit.js
 const db = require('../db');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fitintel_super_secret_jwt_key_2026';
-
 module.exports = async function checkLimit(req, res, next) {
+  const targetUserId = Number(req.body.userId) || 1;
+
   try {
-    let userId = Number(req.body.userId || req.params.userId || req.query.userId);
+    const userRes = await db.query(
+      `SELECT id, is_premium, created_at FROM users WHERE id = $1`,
+      [targetUserId]
+    );
 
-    if (!userId && req.headers.authorization) {
-      try {
-        const token = req.headers.authorization.replace('Bearer ', '');
-        const decoded = jwt.verify(token, JWT_SECRET);
-        userId = Number(decoded.userId);
-      } catch (e) {}
-    }
-
-    if (!userId) {
-      return res.status(400).json({ error: 'Kullanıcı kimliği bulunamadı.' });
-    }
-
-    // PostgreSQL üzerinden tarih ve sayaç kontrolü (Saat dilimi farkı bug'ını engeller)
-    const result = await db.query(`
-      SELECT 
-        id, is_premium, trial_ends_at,
-        (CASE WHEN last_ai_date = CURRENT_DATE THEN daily_ai_count ELSE 0 END) AS effective_count,
-        (trial_ends_at > NOW()) AS is_trial_active
-      FROM users 
-      WHERE id = $1
-    `, [userId]);
-
-    if (result.rows.length === 0) {
+    if (userRes.rows.length === 0) {
       return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
     }
 
-    const user = result.rows[0];
+    const user = userRes.rows[0];
 
-    // PRO kullanıcı veya 1 günlük deneme süresi devam ediyorsa doğrudan izin ver
-    if (user.is_premium || user.is_trial_active) {
+    // 1. PRO Kullanıcılar Sınırsız
+    if (user.is_premium) {
+      req.userIsPro = true;
+      req.remainingQuestions = 999;
       return next();
     }
 
-    // Günlük 3 hak dolmuşsa Paywall tetikle
-    if (Number(user.effective_count) >= 3) {
+    // 2. 14 Günlük Deneme Kontrolü
+    const userCreatedDate = new Date(user.created_at || Date.now());
+    const now = new Date();
+    const diffDays = Math.floor(Math.abs(now.getTime() - userCreatedDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays > 14) {
       return res.status(403).json({
-        code: 'LIMIT_REACHED',
-        error: 'Günlük 3 ücretsiz AI koçluk hakkın doldu. Sınırsız erişim için FitIntel PRO’ya geç!',
+        error: '14 günlük ücretsiz AI Koç deneme süreniz sona erdi. Sınırsız sohbet için PRO üyeliğe geçin.',
+        code: 'TRIAL_EXPIRED',
+        isPro: false,
+        remainingQuestions: 0,
       });
     }
 
-    // Sayacı artır ve tarihi güncelle
-    await db.query(`
-      UPDATE users SET 
-        daily_ai_count = (CASE WHEN last_ai_date = CURRENT_DATE THEN daily_ai_count + 1 ELSE 1 END),
-        last_ai_date = CURRENT_DATE
-      WHERE id = $1
-    `, [userId]);
+    // 3. Günlük 3 Soru Limiti (Bugün gönderilen mesaj sayısı)
+    const countRes = await db.query(
+      `SELECT COUNT(*)::int AS count 
+       FROM chat_messages 
+       WHERE user_id = $1 
+         AND sender = 'user' 
+         AND created_at >= CURRENT_DATE`,
+      [targetUserId]
+    );
 
+    const todayUsed = countRes.rows[0]?.count || 0;
+    const DAILY_LIMIT = 3;
+
+    console.log(`[Limit Kontrolü] Kullanıcı: ${targetUserId} | Bugün Kullanılan: ${todayUsed} / ${DAILY_LIMIT}`);
+
+    if (todayUsed >= DAILY_LIMIT) {
+      return res.status(429).json({
+        error: 'Bugünkü 3 ücretsiz AI Koç hakkınızı doldurdunuz. Haklarınız yarın yenilenecektir.',
+        code: 'DAILY_LIMIT_REACHED',
+        isPro: false,
+        remainingQuestions: 0,
+      });
+    }
+
+    req.userIsPro = false;
+    req.remainingQuestions = Math.max(0, DAILY_LIMIT - (todayUsed + 1));
     next();
-  } catch (err) {
-    console.error('Limit middleware hatası:', err);
-    next(err);
+  } catch (error) {
+    console.error('[checkLimit Kritik Hata]:', error);
+    return res.status(500).json({ error: 'Limit kontrolü yapılamadı: ' + error.message });
   }
 };
