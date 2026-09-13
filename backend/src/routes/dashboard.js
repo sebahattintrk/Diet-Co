@@ -13,10 +13,18 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    // 1. Kullanıcı bilgilerini ve hedeflerini users tablosundan eksiksiz çek
+    // 1. Kullanıcı bilgilerini ve dinamik yaşını doğrudan SQL ile hesaplayıp çek
     const userRes = await db.query(
       `SELECT id, name, email, calorie_target, protein_target, carbs_target, fats_target, goal, 
-              weight_kg, height_cm, birth_date, age, gender, occupation, is_premium,
+              COALESCE(weight_kg, weight, 70.0)::numeric(5,1) AS weight_kg,
+              COALESCE(height_cm, height, 175.0)::numeric(5,1) AS height_cm,
+              birth_date,
+              COALESCE(
+                EXTRACT(YEAR FROM AGE(CURRENT_DATE, birth_date))::INT,
+                age,
+                25
+              ) AS age,
+              gender, occupation, is_premium,
               waist_cm, arm_cm, shoulder_cm, right_leg_cm, left_leg_cm, workout_days_per_week
        FROM users WHERE id = $1`,
       [targetUserId]
