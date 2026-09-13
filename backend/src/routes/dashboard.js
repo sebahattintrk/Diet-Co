@@ -7,17 +7,16 @@ const db = require('../db');
 router.get('/', async (req, res) => {
   const targetUserId = Number(req.query.userId || req.user?.id);
 
-  // 🛑 Asla 1'e fallback yapma; ID yoksa istek reddedilsin
   if (!targetUserId || isNaN(targetUserId)) {
     return res.status(400).json({ error: 'userId belirtilmedi veya geçersiz.' });
   }
 
   try {
-    // 1. Kullanıcı bilgilerini ve dinamik yaşını doğrudan SQL ile hesaplayıp çek
+    // 1. Kullanıcı bilgilerini ve dinamik yaşını güvenle çek
     const userRes = await db.query(
       `SELECT id, name, email, calorie_target, protein_target, carbs_target, fats_target, goal, 
-              COALESCE(weight_kg, weight, 70.0)::numeric(5,1) AS weight_kg,
-              COALESCE(height_cm, height, 175.0)::numeric(5,1) AS height_cm,
+              COALESCE(weight_kg, 70.0)::numeric(5,1) AS weight_kg,
+              COALESCE(height_cm, 175.0)::numeric(5,1) AS height_cm,
               birth_date,
               COALESCE(
                 EXTRACT(YEAR FROM AGE(CURRENT_DATE, birth_date))::INT,
@@ -36,7 +35,7 @@ router.get('/', async (req, res) => {
 
     const user = userRes.rows[0];
 
-    // 2. Bugün tüketilen toplam makroları çek (food_logs tablosundan)
+    // 2. Bugün tüketilen makroları food_logs tablosundan topla
     let caloriesConsumed = 0;
     let proteinConsumed = 0;
     let carbsConsumed = 0;
@@ -56,16 +55,16 @@ router.get('/', async (req, res) => {
 
       if (mealsSumRes.rows.length > 0) {
         const row = mealsSumRes.rows[0];
-        caloriesConsumed = Number(row.total_calories || 0);
-        proteinConsumed = Number(row.total_protein || 0);
-        carbsConsumed = Number(row.total_carbs || 0);
-        fatConsumed = Number(row.total_fats || 0);
+        caloriesConsumed = Math.round(Number(row.total_calories || 0));
+        proteinConsumed = Math.round(Number(row.total_protein || 0));
+        carbsConsumed = Math.round(Number(row.total_carbs || 0));
+        fatConsumed = Math.round(Number(row.total_fats || 0));
       }
     } catch (mealErr) {
       console.error('food_logs sorgu hatası:', mealErr.message);
     }
 
-    // 3. Bugün içilen su miktarını çek (daily_logs tablosundan)
+    // 3. Bugün içilen su miktarını daily_logs tablosundan çek
     let waterConsumed = 0;
     try {
       const waterRes = await db.query(
