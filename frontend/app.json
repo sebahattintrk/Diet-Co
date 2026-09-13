@@ -20,7 +20,8 @@
       "icon": "./assets/Diet-Co-icon.png",
       "infoPlist": {
         "NSCameraUsageDescription": "Öğünlerinizin fotoğrafını çekip kalori ve besin değerlerini analiz etmek için kamera erişimi gereklidir.",
-        "NSPhotoLibraryUsageDescription": "Galerinizdeki yemek fotoğraflarını seçip analiz etmek için fotoğraf erişimi gereklidir."
+        "NSPhotoLibraryUsageDescription": "Galerinizdeki yemek fotoğraflarını seçip analiz etmek için fotoğraf erişimi gereklidir.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -31,6 +32,11 @@
       "package": "com.dietco.app",
       "versionCode": 1,
       "softwareKeyboardLayoutMode": "resize"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "64928379-5b8e-4c92-a60e-62045585d77b"
+      }
     }
   }
 }
