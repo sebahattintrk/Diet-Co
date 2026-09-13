@@ -14,7 +14,8 @@ router.get('/', async (req, res) => {
   try {
     // 1. Kullanıcı bilgilerini ve hedeflerini çek
     const userRes = await db.query(
-      `SELECT * FROM users WHERE id = $1`,
+      `SELECT calorie_target, protein_target, carbs_target, fats_target, goal, name, weight_kg 
+       FROM users WHERE id = $1`,
       [targetUserId]
     );
 
@@ -24,25 +25,7 @@ router.get('/', async (req, res) => {
 
     const user = userRes.rows[0];
 
-    // 2. Bugün içilen su miktarını çek (daily_logs tablosundan)
-    let waterConsumed = 0;
-    try {
-      const waterRes = await db.query(
-        `SELECT COALESCE(water_ml, 0) AS water_ml
-         FROM daily_logs
-         WHERE user_id = $1 
-           AND (log_date = CURRENT_DATE OR log_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')::date)
-         LIMIT 1`,
-        [targetUserId]
-      );
-      if (waterRes.rows.length > 0) {
-        waterConsumed = Number(waterRes.rows[0].water_ml || 0);
-      }
-    } catch (e) {
-      console.warn('Su sorgusu uyarısı:', e.message);
-    }
-
-    // 3. Bugün yenen yemeklerin toplam kalorilerini ve makrolarını çek (logged_meals tablosundan)
+    // 2. Bugün tüketilen toplam makroları çek (food_logs tablosundan)
     let caloriesConsumed = 0;
     let proteinConsumed = 0;
     let carbsConsumed = 0;
@@ -51,29 +34,41 @@ router.get('/', async (req, res) => {
     try {
       const mealsSumRes = await db.query(
         `SELECT 
-            COALESCE(SUM(calories), 0) AS total_cal,
-            COALESCE(SUM(protein_g), 0) AS total_protein,
-            COALESCE(SUM(carbs_g), 0) AS total_carbs,
-            COALESCE(SUM(fats_g), 0) AS total_fats
-         FROM logged_meals
-         WHERE user_id = $1
-           AND (
-             log_date = CURRENT_DATE 
-             OR log_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')::date
-             OR (created_at AT TIME ZONE 'Europe/Istanbul')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')::date
-           )`,
+            COALESCE(SUM(calories), 0)::int AS total_calories,
+            COALESCE(SUM(protein_g), 0)::numeric(6,1) AS total_protein,
+            COALESCE(SUM(carbs_g), 0)::numeric(6,1) AS total_carbs,
+            COALESCE(SUM(fats_g), 0)::numeric(6,1) AS total_fats
+         FROM food_logs
+         WHERE user_id = $1 AND log_date = CURRENT_DATE`,
         [targetUserId]
       );
 
       if (mealsSumRes.rows.length > 0) {
         const row = mealsSumRes.rows[0];
-        caloriesConsumed = Math.round(Number(row.total_cal || 0));
-        proteinConsumed = Math.round(Number(row.total_protein || 0));
-        carbsConsumed = Math.round(Number(row.total_carbs || 0));
-        fatConsumed = Math.round(Number(row.total_fats || 0));
+        caloriesConsumed = Number(row.total_calories || 0);
+        proteinConsumed = Number(row.total_protein || 0);
+        carbsConsumed = Number(row.total_carbs || 0);
+        fatConsumed = Number(row.total_fats || 0);
       }
     } catch (mealErr) {
-      console.warn('logged_meals sorgu hatası, daily_logs fallback deneniyor:', mealErr.message);
+      console.error('food_logs sorgu hatası:', mealErr.message);
+    }
+
+    // 3. Bugün içilen su miktarını çek (daily_logs tablosundan)
+    let waterConsumed = 0;
+    try {
+      const waterRes = await db.query(
+        `SELECT COALESCE(water_ml, 0) AS water_ml
+         FROM daily_logs
+         WHERE user_id = $1 AND log_date = CURRENT_DATE
+         LIMIT 1`,
+        [targetUserId]
+      );
+      if (waterRes.rows.length > 0) {
+        waterConsumed = Number(waterRes.rows[0].water_ml || 0);
+      }
+    } catch (e) {
+      console.warn('Su sorgusu uyarısı:', e.message);
     }
 
     return res.json({
