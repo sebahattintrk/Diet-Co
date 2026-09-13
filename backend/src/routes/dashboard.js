@@ -7,14 +7,17 @@ const db = require('../db');
 router.get('/', async (req, res) => {
   const targetUserId = Number(req.query.userId || req.user?.id);
 
+  // 🛑 Asla 1'e fallback yapma; ID yoksa istek reddedilsin
   if (!targetUserId || isNaN(targetUserId)) {
-    return res.status(400).json({ error: 'userId belirtilmedi.' });
+    return res.status(400).json({ error: 'userId belirtilmedi veya geçersiz.' });
   }
 
   try {
-    // 1. Kullanıcı bilgilerini ve hedeflerini çek
+    // 1. Kullanıcı bilgilerini ve hedeflerini users tablosundan eksiksiz çek
     const userRes = await db.query(
-      `SELECT calorie_target, protein_target, carbs_target, fats_target, goal, name, weight_kg 
+      `SELECT id, name, email, calorie_target, protein_target, carbs_target, fats_target, goal, 
+              weight_kg, height_cm, birth_date, age, gender, occupation, is_premium,
+              waist_cm, arm_cm, shoulder_cm, right_leg_cm, left_leg_cm, workout_days_per_week
        FROM users WHERE id = $1`,
       [targetUserId]
     );
@@ -89,7 +92,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST /api/dashboard/water/add veya /api/water/add
+// POST /api/dashboard/water/add
 router.post('/water/add', async (req, res) => {
   try {
     const { userId, amount = 250 } = req.body;

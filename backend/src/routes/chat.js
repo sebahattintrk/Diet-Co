@@ -9,9 +9,9 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const checkLimit = require('../middleware/checkLimit');
 
 function calculateNutrition(u, newWeight) {
-  const age = u.calculated_age || u.age || 20;
-  const height = parseFloat(u.height_cm || u.height || 180);
-  const weight = parseFloat(newWeight);
+  const age = Number(u.calculated_age || u.age) || 25;
+  const height = Number(u.height_cm || u.height) || 175;
+  const weight = Number(newWeight) || 70;
   const isFemale = (u.gender || '').toLowerCase() === 'female';
   const days = parseInt(u.workout_days_per_week, 10) || 0;
 
@@ -30,9 +30,10 @@ function calculateNutrition(u, newWeight) {
   if (u.goal === 'weight_gain' || u.goal === 'muscle_gain') targetCalories = tdee + 400;
   else if (u.goal === 'weight_loss' || u.goal === 'fat_loss') targetCalories = Math.max(1200, tdee - 450);
 
-  const targetProtein = Math.round(weight * 1.8);
-  const targetFats = Math.round((targetCalories * 0.25) / 9);
-  const targetCarbs = Math.round((targetCalories - (targetProtein * 4) - (targetFats * 9)) / 4);
+  targetCalories = Math.round(Number(targetCalories) || 2000);
+  const targetProtein = Math.round((weight * 1.8) || 120);
+  const targetFats = Math.round(((targetCalories * 0.25) / 9) || 60);
+  const targetCarbs = Math.max(50, Math.round((targetCalories - (targetProtein * 4) - (targetFats * 9)) / 4) || 200);
 
   return { targetCalories, targetProtein, targetCarbs, targetFats };
 }
@@ -61,7 +62,7 @@ function parseWeightFromText(rawText, currentWeight) {
   }
 
   if (val >= 35 && val <= 280) {
-    if (/oldum|dustum|ciktim|kiloyum|tartildim|kilo/.test(text)) return val;
+    if (/oldum|dustum|ciktim|kiloyum|tartildim|kilo|kg/.test(text)) return val;
   }
 
   return null;
@@ -74,7 +75,7 @@ function extractFoodLog(replyText, userMessage) {
   if (tagMatch) {
     try {
       parsed = JSON.parse(tagMatch[1]);
-    } catch (_) {}
+    } catch (_) { }
   }
 
   if (!parsed) {
@@ -82,7 +83,7 @@ function extractFoodLog(replyText, userMessage) {
     if (jsonMatch) {
       try {
         parsed = JSON.parse(jsonMatch[1]);
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -112,7 +113,10 @@ function extractFoodLog(replyText, userMessage) {
 
 router.post('/', checkLimit, async (req, res) => {
   const { message, userId } = req.body;
-  const targetUserId = Number(userId) || 1;
+  const targetUserId = Number(userId || req.user?.id);
+  if (!targetUserId || isNaN(targetUserId)) {
+    return res.status(400).json({ error: 'Geçersiz veya eksik kullanıcı oturumu.' });
+  }
 
   try {
     if (!message || !message.trim()) {
@@ -126,7 +130,6 @@ router.post('/', checkLimit, async (req, res) => {
 
     let u = userRes.rows[0];
 
-    // 1. Kullanıcı mesajını limit sayacı için chat_messages tablosuna kaydet
     try {
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -142,10 +145,9 @@ router.post('/', checkLimit, async (req, res) => {
 
     const detectedWeight = parseWeightFromText(message, currentWeight);
     let weightUpdated = false;
-    let newMetrics = null;
 
     if (detectedWeight && detectedWeight !== currentWeight) {
-      newMetrics = calculateNutrition(u, detectedWeight);
+      const newMetrics = calculateNutrition(u, detectedWeight);
 
       await db.query(`
         UPDATE users 
@@ -167,7 +169,7 @@ router.post('/', checkLimit, async (req, res) => {
           ON CONFLICT (user_id, log_date)
           DO UPDATE SET weight_kg = EXCLUDED.weight_kg;
         `, [targetUserId, detectedWeight]);
-      } catch (_) {}
+      } catch (_) { }
 
       currentWeight = detectedWeight;
       u.weight_kg = detectedWeight;
@@ -177,37 +179,31 @@ router.post('/', checkLimit, async (req, res) => {
     }
 
     let eatenCal = 0;
-    let eatenPro = 0;
     try {
       const todaySummary = await db.query(`
-        SELECT COALESCE(SUM(calories), 0) as total_cal,
-               COALESCE(SUM(protein_g), 0) as total_pro
+        SELECT COALESCE(SUM(calories), 0) as total_cal
         FROM food_logs
         WHERE user_id = $1 AND (log_date = CURRENT_DATE OR created_at::date = CURRENT_DATE)
       `, [targetUserId]);
-      eatenCal = Number(todaySummary.rows[0].total_cal);
-      eatenPro = Number(todaySummary.rows[0].total_pro);
-    } catch (_) {}
+      eatenCal = Number(todaySummary.rows[0]?.total_cal || 0);
+    } catch (_) { }
 
-    const targetCal = u.calorie_target || 2200;
-    const remainingCal = targetCal - eatenCal;
-
-    const medicalBlock = generateMedicalConstraints(u.health_conditions);
+    const targetCal = Number(u.calorie_target) || 2200;
+    const medicalBlock = typeof generateMedicalConstraints === 'function'
+      ? generateMedicalConstraints(u.health_conditions)
+      : '';
 
     const systemInstruction = `
-Sen Diet-Co uygulamasının stratejik, bilimsel ve motive edici fitness/beslenme koçusun.
+Sen Diet-Co uygulamasının stratejik, motive edici beslenme ve fitness koçusun.
 Kullanıcı: ${displayName}
-Hedef: ${u.goal || 'Sağlıklı Yaşam'} | Günlük Hedef: ${targetCal} kcal
-Bugün Alınan: ${eatenCal} kcal
+Hedef: ${u.goal || 'Sağlıklı Yaşam'} | Günlük Kalori Hedefi: ${targetCal} kcal
+Bugün Alınan Kalori: ${eatenCal} kcal | Güncel Kilo: ${currentWeight} kg
+${weightUpdated ? `NOT: Kullanıcı az önce yeni kilosunu bildirdi (${currentWeight} kg). Kilo güncellendi!` : ''}
 
 ${medicalBlock}
 
-🚨 ÖNEMLİ SAĞLIK VE TAVSİYE KURALI:
-Kullanıcı sana yemek önerisi sorduğunda veya bir besin tüketmek istediğini söylediğinde (Örn: "Dürüm yesem olur mu?", "Tatlı krizim tuttu ne yiyeyim?"):
-Kullanıcının yukarıda belirtilen sağlık rahatsızlıklarına kesinlikle dikkat et! Eğer yemek istediği veya sorduğu şey hastalığına zararlıysa (örneğin çölyak için unlu/glutenli gıdalar, insülin direnci için şekerli tatlılar vb.), nazikçe bunun sağlığı için zararlı olduğunu söyle ve güvenli bir alternatif öner. ASLA yasaklı bir besini tavsiye etme!
-
 ÖNEMLİ BESİN KAYIT KURALI:
-Kullanıcı bir şey yediğinde/içtiğinde tahmini değerleri belirt ve cevabın en sonuna ekle:
+Kullanıcı bir şey yediğini belirttiğinde cevabın en sonuna şu formatı ekle:
 [BESIN_KAYIT: {"food_name": "Öğün Adı", "calories": 250, "protein_g": 15, "carbs_g": 20, "fats_g": 8}]
 `;
 
@@ -216,7 +212,7 @@ Kullanıcı bir şey yediğinde/içtiğinde tahmini değerleri belirt ve cevabı
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: 'gemini-2.5-flash',
         contents: message,
         config: { systemInstruction, temperature: 0.7 },
       });
@@ -256,10 +252,13 @@ Kullanıcı bir şey yediğinde/içtiğinde tahmini değerleri belirt ve cevabı
 
     } catch (aiErr) {
       console.error('Chat AI hatası:', aiErr.message || aiErr);
-      reply = `Mesajınızı aldım ${displayName}! Sağlık durumunuz ve hedefleriniz doğrultusunda harika ilerliyoruz. 💪`;
+      if (weightUpdated) {
+        reply = `Harika haber ${displayName}! Kilonu ${currentWeight} kg olarak güncelledim ve günlük kalori/makro hedeflerini yeniden hesapladım. Tempomuzu koruyarak devam edelim! 💪`;
+      } else {
+        reply = `Harika bir adım ${displayName}! Hedeflerin doğrultusunda yanındayım, sağlıklı alışkanlıklarla devam ediyoruz. 💪`;
+      }
     }
 
-    // 2. Modelin cevabını da sohbet geçmişine kaydet
     try {
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
