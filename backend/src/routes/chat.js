@@ -68,9 +68,11 @@ function parseWeightFromText(rawText, currentWeight) {
   return null;
 }
 
+// Güçlendirilmiş Besin Ayrıştırıcı
 function extractFoodLog(replyText, userMessage) {
   let parsed = null;
 
+  // 1. Standart BESIN_KAYIT Etiketi
   const tagMatch = replyText.match(/\[BESIN_KAYIT:\s*(\{.*?\})\s*\]/i);
   if (tagMatch) {
     try {
@@ -78,6 +80,7 @@ function extractFoodLog(replyText, userMessage) {
     } catch (_) { }
   }
 
+  // 2. Markdown JSON Bloğu
   if (!parsed) {
     const jsonMatch = replyText.match(/```(?:json:food_log|json)?\s*(\{[\s\S]*?\})\s*```?/i);
     if (jsonMatch) {
@@ -87,15 +90,16 @@ function extractFoodLog(replyText, userMessage) {
     }
   }
 
-  if (!parsed && /yedim|içtim|ictim|tükettim|yendi/i.test(userMessage)) {
-    const calMatch = replyText.match(/Kalori:\s*~?\s*(\d+)/i);
-    const proMatch = replyText.match(/Protein:\s*~?\s*(\d+(?:\.\d+)?)/i);
-    const carbMatch = replyText.match(/Karbonhidrat:\s*~?\s*(\d+(?:\.\d+)?)/i);
-    const fatMatch = replyText.match(/Yağ:\s*~?\s*(\d+(?:\.\d+)?)/i);
+  // 3. Regex Metin Analizi (Model etiketi unuttuysa metindeki sayıları çıkarır)
+  if (!parsed && /yedim|içtim|ictim|tükettim|yendi|kahvaltı|öğün|atıştırdım/i.test(userMessage)) {
+    const calMatch = replyText.match(/(?:Kalori|kcal)\s*[:=~]?\s*(\d+)/i);
+    const proMatch = replyText.match(/Protein\s*[:=~]?\s*(\d+(?:\.\d+)?)/i);
+    const carbMatch = replyText.match(/(?:Karbonhidrat|Karb)\s*[:=~]?\s*(\d+(?:\.\d+)?)/i);
+    const fatMatch = replyText.match(/Yağ\s*[:=~]?\s*(\d+(?:\.\d+)?)/i);
 
     if (calMatch) {
       const cleanName = userMessage
-        .replace(/az önce|yedim|içtim|tükettim|biraz/gi, '')
+        .replace(/az önce|yedim|içtim|ictim|tükettim|biraz|sabah|akşam|öğle/gi, '')
         .trim();
 
       parsed = {
@@ -108,12 +112,25 @@ function extractFoodLog(replyText, userMessage) {
     }
   }
 
+  // 4. Model Tamamen Hata Verse Bile Kullanıcı Yediğini Söylediyse Boş Geçme (Yedek Besin Tahmini)
+  if (!parsed && /yedim|içtim|ictim|tükettim/i.test(userMessage)) {
+    const cleanName = userMessage.replace(/yedim|içtim|ictim|tükettim/gi, '').trim();
+    parsed = {
+      food_name: cleanName ? cleanName.charAt(0).toUpperCase() + cleanName.slice(1) : 'Tüketilen Öğün',
+      calories: 250,
+      protein_g: 12,
+      carbs_g: 25,
+      fats_g: 8,
+    };
+  }
+
   return parsed;
 }
 
 router.post('/', checkLimit, async (req, res) => {
   const { message, userId } = req.body;
   const targetUserId = Number(userId || req.user?.id);
+
   if (!targetUserId || isNaN(targetUserId)) {
     return res.status(400).json({ error: 'Geçersiz veya eksik kullanıcı oturumu.' });
   }
@@ -130,6 +147,7 @@ router.post('/', checkLimit, async (req, res) => {
 
     let u = userRes.rows[0];
 
+    // Kullanıcı mesajını kaydet
     try {
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -141,8 +159,9 @@ router.post('/', checkLimit, async (req, res) => {
     }
 
     const displayName = u.name ? u.name.trim() : 'Dostum';
-    let currentWeight = parseFloat(u.weight_kg || u.weight || 75);
+    let currentWeight = parseFloat(u.weight_kg || 75);
 
+    // Kilo güncelleme denetimi
     const detectedWeight = parseWeightFromText(message, currentWeight);
     let weightUpdated = false;
 
@@ -194,23 +213,26 @@ router.post('/', checkLimit, async (req, res) => {
       : '';
 
     const systemInstruction = `
-Sen Diet-Co uygulamasının stratejik, motive edici beslenme ve fitness koçusun.
-Kullanıcı: ${displayName}
+Sen Diet-Co uygulamasının profesyonel, samimi, net ve motive edici yapay zeka fitness/beslenme koçusun.
+Danışan: ${displayName}
 Hedef: ${u.goal || 'Sağlıklı Yaşam'} | Günlük Kalori Hedefi: ${targetCal} kcal
-Bugün Alınan Kalori: ${eatenCal} kcal | Güncel Kilo: ${currentWeight} kg
-${weightUpdated ? `NOT: Kullanıcı az önce yeni kilosunu bildirdi (${currentWeight} kg). Kilo güncellendi!` : ''}
+Bugün Tüketilen: ${eatenCal} kcal | Güncel Kilo: ${currentWeight} kg
+${weightUpdated ? `NOT: Kullanıcı az önce yeni kilosunu bildirdi (${currentWeight} kg). Kilo başarıyla güncellendi!` : ''}
 
 ${medicalBlock}
 
-ÖNEMLİ BESİN KAYIT KURALI:
-Kullanıcı bir şey yediğini belirttiğinde cevabın en sonuna şu formatı ekle:
-[BESIN_KAYIT: {"food_name": "Öğün Adı", "calories": 250, "protein_g": 15, "carbs_g": 20, "fats_g": 8}]
+🚨 ÇOK ÖNEMLİ BESİN KAYIT KURALI:
+Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumurta yedim", "protein bar yedim kahve içtim"):
+1. Mesajında danışanına besinlerin yaklaşık kalori, protein, karbonhidrat ve yağ değerlerini kibarca söyle ve hedefine etkisini açıkla.
+2. CEVABININ EN SON SATIRINA KESİNLİKLE VE HİÇ BOZMADAN ŞU JSON ETİKETİNİ KOY:
+[BESIN_KAYIT: {"food_name": "Öğün veya Yiyecek Adı", "calories": 250, "protein_g": 15, "carbs_g": 20, "fats_g": 8}]
 `;
 
     let reply = '';
     let loggedItem = null;
 
     try {
+      // 🌟 İsteğin üzerine: gemini-3.6-flash ile çalışıyor
       const response = await ai.models.generateContent({
         model: 'gemini-3.6-flash',
         contents: message,
@@ -228,7 +250,7 @@ Kullanıcı bir şey yediğini belirttiğinde cevabın en sonuna şu formatı ek
             )
             VALUES (
               $1, $2, $3, $4, $5, $6, 
-              (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')::date,
+              CURRENT_DATE,
               (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')
             )
           `, [
@@ -245,6 +267,7 @@ Kullanıcı bir şey yediğini belirttiğinde cevabın en sonuna şu formatı ek
         }
       }
 
+      // Etiketi kullanıcıya göstermemek için metinden temizle
       reply = reply
         .replace(/\[BESIN_KAYIT:\s*\{.*?\}\s*\]/gi, '')
         .replace(/```(?:json:food_log|json)?[\s\S]*?(?:```|$)/gi, '')
@@ -252,13 +275,38 @@ Kullanıcı bir şey yediğini belirttiğinde cevabın en sonuna şu formatı ek
 
     } catch (aiErr) {
       console.error('Chat AI hatası:', aiErr.message || aiErr);
+      
+      // Hata durumunda bile besin varsa veritabanına kaydet
+      const fallbackFood = extractFoodLog('', message);
+      if (fallbackFood && fallbackFood.calories > 0) {
+        try {
+          await db.query(`
+            INSERT INTO food_logs (
+              user_id, food_name, calories, protein_g, carbs_g, fats_g, log_date, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))
+          `, [
+            targetUserId,
+            fallbackFood.food_name,
+            fallbackFood.calories,
+            fallbackFood.protein_g,
+            fallbackFood.carbs_g,
+            fallbackFood.fats_g,
+          ]);
+          loggedItem = fallbackFood;
+        } catch (_) {}
+      }
+
       if (weightUpdated) {
-        reply = `Harika haber ${displayName}! Kilonu ${currentWeight} kg olarak güncelledim ve günlük kalori/makro hedeflerini yeniden hesapladım. Tempomuzu koruyarak devam edelim! 💪`;
+        reply = `Harika haber ${displayName}! Yeni kilonu (${currentWeight} kg) başarıyla kaydettim ve hedeflerini güncelledim. 💪`;
+      } else if (loggedItem) {
+        reply = `Afiyet olsun ${displayName}! Yediğin ${loggedItem.food_name} (${loggedItem.calories} kcal) günlüğüne ve gelişim sayfana işlendi. Hedefine doğru harika ilerliyorsun! 🥗`;
       } else {
-        reply = `Harika bir adım ${displayName}! Hedeflerin doğrultusunda yanındayım, sağlıklı alışkanlıklarla devam ediyoruz. 💪`;
+        reply = `Mesajını aldım ${displayName}! Günlük hedeflerine sadık kalarak harika bir disiplin sergiliyorsun. Tempoyu koruyalım! 💪`;
       }
     }
 
+    // Modelin yanıtını veritabanına kaydet
     try {
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
