@@ -148,15 +148,54 @@ router.post('/', checkLimit, async (req, res) => {
     const lowerMsg = message.trim().toLowerCase();
 
     // ----------------------------------------------------
-    // 🗑️ 1. TÜM ÖĞÜNLERİ SİLME (GEÇMİŞ DAHİL HEPSİNİ TEMİZLE)
+    // 💧 1. SADECE SU BARINI SIFIRLAMA
+    // ----------------------------------------------------
+    if (
+      /suyumu sıfırla|suyumu sifirla|suyu sıfırla|suyu sifirla|suyu temizle|su tüketimini sıfırla/i.test(lowerMsg) ||
+      (/su|suları|sulari/i.test(lowerMsg) && /sıfırla|sifirla|temizle/i.test(lowerMsg))
+    ) {
+      await db.query(`
+        INSERT INTO daily_logs (user_id, log_date, water_ml)
+        VALUES ($1, ${ACTIVE_DATE_SQL}, 0)
+        ON CONFLICT (user_id, log_date)
+        DO UPDATE SET water_ml = 0;
+      `, [targetUserId]);
+
+      const resetWaterReply = `Tamamdır ${displayName}, bugünkü su tüketimini sıfırladım! Sayfayı yenilediğinde su barı sıfırdan başlayacaktır. 💧`;
+
+      await db.query(
+        `INSERT INTO chat_messages (user_id, message, sender, created_at)
+         VALUES ($1, $2, 'model', (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))`,
+        [targetUserId, resetWaterReply]
+      );
+
+      return res.status(200).json({
+        reply: resetWaterReply,
+        loggedItem: null,
+        user: u,
+        remainingQuestions: req.remainingQuestions,
+        isPro: req.userIsPro,
+      });
+    }
+
+    // ----------------------------------------------------
+    // 🗑️ 2. TÜM ÖĞÜNLERİ SİLME (GEÇMİŞ DAHİL TÜM ÖĞÜNLER VE SUYU SIFIRLAR)
     // ----------------------------------------------------
     if (
       /tüm öğünlerimi sil|tum ogunlerimi sil|bütün öğünlerimi sil|butun ogunlerimi sil|tüm yediklerimi sil|tum yediklerimi sil|bütün yediklerimi sil|öğünlerimin hepsini sil/i.test(lowerMsg) ||
       (/tüm|tum|bütün|butun|hepsini/i.test(lowerMsg) && /öğün|ogun|yemek|yediklerim/i.test(lowerMsg) && /sil|kaldır|kaldir|temizle/i.test(lowerMsg))
     ) {
       await db.query(`DELETE FROM food_logs WHERE user_id = $1`, [targetUserId]);
+      
+      // Su barını da sıfırla
+      await db.query(`
+        INSERT INTO daily_logs (user_id, log_date, water_ml)
+        VALUES ($1, ${ACTIVE_DATE_SQL}, 0)
+        ON CONFLICT (user_id, log_date)
+        DO UPDATE SET water_ml = 0;
+      `, [targetUserId]);
 
-      const resetAllReply = `Tamamdır ${displayName}, sistemdeki tüm geçmiş ve bugünkü öğün kayıtlarını başarıyla temizledim. Sayfayı yenilediğinde günlüğün tertemiz görünecektir! 🚀`;
+      const resetAllReply = `Tamamdır ${displayName}, sistemdeki tüm geçmiş ve bugünkü öğün kayıtlarını ve su tüketimini başarıyla temizledim. Sayfayı yenilediğinde günlüğün tertemiz görünecektir! 🚀`;
 
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -174,12 +213,21 @@ router.post('/', checkLimit, async (req, res) => {
     }
 
     // ----------------------------------------------------
-    // 🗑️ 2. SADECE BUGÜNKÜ YEDİKLERİMİ SIFIRLAMA
+    // 🗑️ 3. SADECE BUGÜNKÜ YEDİKLERİMİ VE SUYU SIFIRLAMA
     // ----------------------------------------------------
-    if (/sıfırla|sifirla|temizle|yanlış yedim|yanlis yedim/i.test(lowerMsg) && /bugün|bugun|öğün|yemek|yediklerim/i.test(lowerMsg)) {
+    if (/sıfırla|sifirla|temizle|yanlış yedim|yanlis yedim/i.test(lowerMsg) && /bugün|bugun|öğün|yemek|yediklerim|günü/i.test(lowerMsg)) {
+      // 1. Bugünkü öğünleri sil
       await db.query(`DELETE FROM food_logs WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL}`, [targetUserId]);
 
-      const resetReply = `Anladım ${displayName}, bugünkü tüm yediklerini günlüğünden temizledim. Sayfayı yenilediğinde kalorilerin sıfırlanmış olacaktır! Yeni öğünlerini girmeye baştan başlayabilirsin. 🔄`;
+      // 2. Bugünkü su barını da sıfırla
+      await db.query(`
+        INSERT INTO daily_logs (user_id, log_date, water_ml)
+        VALUES ($1, ${ACTIVE_DATE_SQL}, 0)
+        ON CONFLICT (user_id, log_date)
+        DO UPDATE SET water_ml = 0;
+      `, [targetUserId]);
+
+      const resetReply = `Anladım ${displayName}, bugünkü tüm yediklerini ve su barını tamamen sıfırladım. Sayfayı yenilediğinde kalorilerin ve suyun sıfır olarak güncellenecektir! Yeni başlangıcını yapabilirsin. 🔄`;
 
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -197,7 +245,7 @@ router.post('/', checkLimit, async (req, res) => {
     }
 
     // ----------------------------------------------------
-    // 🗑️ 3. SPESİFİK TEK BİR ÖĞÜNÜ SİLME (SON ÖĞÜN)
+    // 🗑️ 4. SPESİFİK TEK BİR ÖĞÜNÜ SİLME (SON ÖĞÜN)
     // ----------------------------------------------------
     if (/sil|kaldır|kaldir/i.test(lowerMsg) && /öğün|yemek|yediğim|yedigim/i.test(lowerMsg)) {
       const lastFoodRes = await db.query(
