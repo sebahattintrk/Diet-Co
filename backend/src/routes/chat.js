@@ -148,9 +148,35 @@ router.post('/', checkLimit, async (req, res) => {
     const lowerMsg = message.trim().toLowerCase();
 
     // ----------------------------------------------------
-    // 🗑️ ÖĞÜN SİLME VEYA GÜNÜ SIFIRLAMA MANTIĞI
+    // 🗑️ 1. TÜM ÖĞÜNLERİ SİLME (GEÇMİŞ DAHİL HEPSİNİ TEMİZLE)
     // ----------------------------------------------------
-    if (/sıfırla|sifirla|temizle|yanlış yedim|yanlis yedim/i.test(lowerMsg) && /bugün|öğün|yemek|yediklerim|hepsini/i.test(lowerMsg)) {
+    if (
+      /tüm öğünlerimi sil|tum ogunlerimi sil|bütün öğünlerimi sil|butun ogunlerimi sil|tüm yediklerimi sil|tum yediklerimi sil|bütün yediklerimi sil|öğünlerimin hepsini sil/i.test(lowerMsg) ||
+      (/tüm|tum|bütün|butun|hepsini/i.test(lowerMsg) && /öğün|ogun|yemek|yediklerim/i.test(lowerMsg) && /sil|kaldır|kaldir|temizle/i.test(lowerMsg))
+    ) {
+      await db.query(`DELETE FROM food_logs WHERE user_id = $1`, [targetUserId]);
+
+      const resetAllReply = `Tamamdır ${displayName}, sistemdeki tüm geçmiş ve bugünkü öğün kayıtlarını başarıyla temizledim. Sayfayı yenilediğinde günlüğün tertemiz görünecektir! 🚀`;
+
+      await db.query(
+        `INSERT INTO chat_messages (user_id, message, sender, created_at)
+         VALUES ($1, $2, 'model', (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))`,
+        [targetUserId, resetAllReply]
+      );
+
+      return res.status(200).json({
+        reply: resetAllReply,
+        loggedItem: null,
+        user: u,
+        remainingQuestions: req.remainingQuestions,
+        isPro: req.userIsPro,
+      });
+    }
+
+    // ----------------------------------------------------
+    // 🗑️ 2. SADECE BUGÜNKÜ YEDİKLERİMİ SIFIRLAMA
+    // ----------------------------------------------------
+    if (/sıfırla|sifirla|temizle|yanlış yedim|yanlis yedim/i.test(lowerMsg) && /bugün|bugun|öğün|yemek|yediklerim/i.test(lowerMsg)) {
       await db.query(`DELETE FROM food_logs WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL}`, [targetUserId]);
 
       const resetReply = `Anladım ${displayName}, bugünkü tüm yediklerini günlüğünden temizledim. Sayfayı yenilediğinde kalorilerin sıfırlanmış olacaktır! Yeni öğünlerini girmeye baştan başlayabilirsin. 🔄`;
@@ -170,8 +196,10 @@ router.post('/', checkLimit, async (req, res) => {
       });
     }
 
+    // ----------------------------------------------------
+    // 🗑️ 3. SPESİFİK TEK BİR ÖĞÜNÜ SİLME (SON ÖĞÜN)
+    // ----------------------------------------------------
     if (/sil|kaldır|kaldir/i.test(lowerMsg) && /öğün|yemek|yediğim|yedigim/i.test(lowerMsg)) {
-      // Spesifik son öğünü veya ismi geçen öğünü sil
       const lastFoodRes = await db.query(
         `SELECT id, food_name FROM food_logs WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL} ORDER BY id DESC LIMIT 1`,
         [targetUserId]
@@ -199,7 +227,7 @@ router.post('/', checkLimit, async (req, res) => {
       }
     }
 
-    // 1. Kullanıcı mesajını kaydet
+    // Kullanıcı mesajını kaydet
     try {
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
