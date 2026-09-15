@@ -8,6 +8,9 @@ const { generateMedicalConstraints } = require('../services/healthFilter');
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const checkLimit = require('../middleware/checkLimit');
 
+// Türkiye saatine göre gece 03:00'te gün devreden SQL tarih tanımı
+const ACTIVE_DATE_SQL = `((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul') - INTERVAL '3 hours')::date`;
+
 function calculateNutrition(u, newWeight) {
   const age = Number(u.calculated_age || u.age) || 25;
   const height = Number(u.height_cm || u.height) || 175;
@@ -68,11 +71,9 @@ function parseWeightFromText(rawText, currentWeight) {
   return null;
 }
 
-// Güçlendirilmiş Besin Ayrıştırıcı
 function extractFoodLog(replyText, userMessage) {
   let parsed = null;
 
-  // 1. Standart BESIN_KAYIT Etiketi
   const tagMatch = replyText.match(/\[BESIN_KAYIT:\s*(\{.*?\})\s*\]/i);
   if (tagMatch) {
     try {
@@ -80,7 +81,6 @@ function extractFoodLog(replyText, userMessage) {
     } catch (_) { }
   }
 
-  // 2. Markdown JSON Bloğu
   if (!parsed) {
     const jsonMatch = replyText.match(/```(?:json:food_log|json)?\s*(\{[\s\S]*?\})\s*```?/i);
     if (jsonMatch) {
@@ -90,7 +90,6 @@ function extractFoodLog(replyText, userMessage) {
     }
   }
 
-  // 3. Regex Metin Analizi (Model etiketi unuttuysa metindeki sayıları çıkarır)
   if (!parsed && /yedim|içtim|ictim|tükettim|yendi|kahvaltı|öğün|atıştırdım/i.test(userMessage)) {
     const calMatch = replyText.match(/(?:Kalori|kcal)\s*[:=~]?\s*(\d+)/i);
     const proMatch = replyText.match(/Protein\s*[:=~]?\s*(\d+(?:\.\d+)?)/i);
@@ -112,7 +111,6 @@ function extractFoodLog(replyText, userMessage) {
     }
   }
 
-  // 4. Model Tamamen Hata Verse Bile Kullanıcı Yediğini Söylediyse Boş Geçme (Yedek Besin Tahmini)
   if (!parsed && /yedim|içtim|ictim|tükettim/i.test(userMessage)) {
     const cleanName = userMessage.replace(/yedim|içtim|ictim|tükettim/gi, '').trim();
     parsed = {
@@ -146,8 +144,62 @@ router.post('/', checkLimit, async (req, res) => {
     }
 
     let u = userRes.rows[0];
+    const displayName = u.name ? u.name.trim() : 'Dostum';
+    const lowerMsg = message.trim().toLowerCase();
 
-    // Kullanıcı mesajını kaydet
+    // ----------------------------------------------------
+    // 🗑️ ÖĞÜN SİLME VEYA GÜNÜ SIFIRLAMA MANTIĞI
+    // ----------------------------------------------------
+    if (/sıfırla|sifirla|temizle|yanlış yedim|yanlis yedim/i.test(lowerMsg) && /bugün|öğün|yemek|yediklerim|hepsini/i.test(lowerMsg)) {
+      await db.query(`DELETE FROM food_logs WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL}`, [targetUserId]);
+
+      const resetReply = `Anladım ${displayName}, bugünkü tüm yediklerini günlüğünden temizledim. Sayfayı yenilediğinde kalorilerin sıfırlanmış olacaktır! Yeni öğünlerini girmeye baştan başlayabilirsin. 🔄`;
+
+      await db.query(
+        `INSERT INTO chat_messages (user_id, message, sender, created_at)
+         VALUES ($1, $2, 'model', (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))`,
+        [targetUserId, resetReply]
+      );
+
+      return res.status(200).json({
+        reply: resetReply,
+        loggedItem: null,
+        user: u,
+        remainingQuestions: req.remainingQuestions,
+        isPro: req.userIsPro,
+      });
+    }
+
+    if (/sil|kaldır|kaldir/i.test(lowerMsg) && /öğün|yemek|yediğim|yedigim/i.test(lowerMsg)) {
+      // Spesifik son öğünü veya ismi geçen öğünü sil
+      const lastFoodRes = await db.query(
+        `SELECT id, food_name FROM food_logs WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL} ORDER BY id DESC LIMIT 1`,
+        [targetUserId]
+      );
+
+      if (lastFoodRes.rows.length > 0) {
+        const deletedFood = lastFoodRes.rows[0];
+        await db.query(`DELETE FROM food_logs WHERE id = $1`, [deletedFood.id]);
+
+        const deleteReply = `Tamamdır ${displayName}, günlüğüne son eklediğin "${deletedFood.food_name}" öğününü sildim ve kalorilerini düştüm! 👌`;
+
+        await db.query(
+          `INSERT INTO chat_messages (user_id, message, sender, created_at)
+           VALUES ($1, $2, 'model', (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))`,
+          [targetUserId, deleteReply]
+        );
+
+        return res.status(200).json({
+          reply: deleteReply,
+          loggedItem: null,
+          user: u,
+          remainingQuestions: req.remainingQuestions,
+          isPro: req.userIsPro,
+        });
+      }
+    }
+
+    // 1. Kullanıcı mesajını kaydet
     try {
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -158,10 +210,7 @@ router.post('/', checkLimit, async (req, res) => {
       console.warn('chat_messages kullanıcı mesajı kayıt uyarısı:', saveUserMsgErr.message);
     }
 
-    const displayName = u.name ? u.name.trim() : 'Dostum';
     let currentWeight = parseFloat(u.weight_kg || 75);
-
-    // Kilo güncelleme denetimi
     const detectedWeight = parseWeightFromText(message, currentWeight);
     let weightUpdated = false;
 
@@ -184,7 +233,7 @@ router.post('/', checkLimit, async (req, res) => {
       try {
         await db.query(`
           INSERT INTO daily_logs (user_id, log_date, weight_kg)
-          VALUES ($1, CURRENT_DATE, $2)
+          VALUES ($1, ${ACTIVE_DATE_SQL}, $2)
           ON CONFLICT (user_id, log_date)
           DO UPDATE SET weight_kg = EXCLUDED.weight_kg;
         `, [targetUserId, detectedWeight]);
@@ -202,7 +251,7 @@ router.post('/', checkLimit, async (req, res) => {
       const todaySummary = await db.query(`
         SELECT COALESCE(SUM(calories), 0) as total_cal
         FROM food_logs
-        WHERE user_id = $1 AND (log_date = CURRENT_DATE OR created_at::date = CURRENT_DATE)
+        WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL}
       `, [targetUserId]);
       eatenCal = Number(todaySummary.rows[0]?.total_cal || 0);
     } catch (_) { }
@@ -232,7 +281,6 @@ Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumur
     let loggedItem = null;
 
     try {
-      // 🌟 İsteğin üzerine: gemini-3.6-flash ile çalışıyor
       const response = await ai.models.generateContent({
         model: 'gemini-3.6-flash',
         contents: message,
@@ -250,7 +298,7 @@ Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumur
             )
             VALUES (
               $1, $2, $3, $4, $5, $6, 
-              CURRENT_DATE,
+              ${ACTIVE_DATE_SQL},
               (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')
             )
           `, [
@@ -267,7 +315,6 @@ Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumur
         }
       }
 
-      // Etiketi kullanıcıya göstermemek için metinden temizle
       reply = reply
         .replace(/\[BESIN_KAYIT:\s*\{.*?\}\s*\]/gi, '')
         .replace(/```(?:json:food_log|json)?[\s\S]*?(?:```|$)/gi, '')
@@ -276,7 +323,6 @@ Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumur
     } catch (aiErr) {
       console.error('Chat AI hatası:', aiErr.message || aiErr);
       
-      // Hata durumunda bile besin varsa veritabanına kaydet
       const fallbackFood = extractFoodLog('', message);
       if (fallbackFood && fallbackFood.calories > 0) {
         try {
@@ -284,7 +330,7 @@ Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumur
             INSERT INTO food_logs (
               user_id, food_name, calories, protein_g, carbs_g, fats_g, log_date, created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))
+            VALUES ($1, $2, $3, $4, $5, $6, ${ACTIVE_DATE_SQL}, (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))
           `, [
             targetUserId,
             fallbackFood.food_name,
@@ -306,7 +352,6 @@ Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumur
       }
     }
 
-    // Modelin yanıtını veritabanına kaydet
     try {
       await db.query(
         `INSERT INTO chat_messages (user_id, message, sender, created_at)
