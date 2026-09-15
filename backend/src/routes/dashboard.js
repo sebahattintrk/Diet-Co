@@ -3,6 +3,9 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
+// Gece 03:00 sıfırlama kuralı
+const ACTIVE_DATE_SQL = `((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul') - INTERVAL '3 hours')::date`;
+
 // GET /api/dashboard?userId=...
 router.get('/', async (req, res) => {
   const targetUserId = Number(req.query.userId || req.user?.id);
@@ -12,7 +15,7 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    // 1. Kullanıcı bilgilerini ve dinamik yaşını güvenle çek
+    // 1. Kullanıcı bilgileri
     const userRes = await db.query(
       `SELECT id, name, email, calorie_target, protein_target, carbs_target, fats_target, goal, 
               COALESCE(weight_kg, 70.0)::numeric(5,1) AS weight_kg,
@@ -35,7 +38,7 @@ router.get('/', async (req, res) => {
 
     const user = userRes.rows[0];
 
-    // 2. Bugün tüketilen makroları food_logs tablosundan topla
+    // 2. Bugünün makroları (Gece 03:00'e kadar aynı gün sayılır)
     let caloriesConsumed = 0;
     let proteinConsumed = 0;
     let carbsConsumed = 0;
@@ -49,7 +52,7 @@ router.get('/', async (req, res) => {
             COALESCE(SUM(carbs_g), 0)::numeric(6,1) AS total_carbs,
             COALESCE(SUM(fats_g), 0)::numeric(6,1) AS total_fats
          FROM food_logs
-         WHERE user_id = $1 AND log_date = CURRENT_DATE`,
+         WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL}`,
         [targetUserId]
       );
 
@@ -64,13 +67,13 @@ router.get('/', async (req, res) => {
       console.error('food_logs sorgu hatası:', mealErr.message);
     }
 
-    // 3. Bugün içilen su miktarını daily_logs tablosundan çek
+    // 3. Bugünün suyu (Gece 03:00'e kadar korunur)
     let waterConsumed = 0;
     try {
       const waterRes = await db.query(
         `SELECT COALESCE(water_ml, 0) AS water_ml
          FROM daily_logs
-         WHERE user_id = $1 AND log_date = CURRENT_DATE
+         WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL}
          LIMIT 1`,
         [targetUserId]
       );
@@ -111,7 +114,7 @@ router.post('/water/add', async (req, res) => {
 
     const result = await db.query(
       `INSERT INTO daily_logs (user_id, log_date, water_ml)
-       VALUES ($1, CURRENT_DATE, $2)
+       VALUES ($1, ${ACTIVE_DATE_SQL}, $2)
        ON CONFLICT (user_id, log_date)
        DO UPDATE SET water_ml = COALESCE(daily_logs.water_ml, 0) + EXCLUDED.water_ml
        RETURNING water_ml;`,
