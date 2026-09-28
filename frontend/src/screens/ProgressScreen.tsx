@@ -11,6 +11,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
@@ -63,25 +64,37 @@ export function ProgressScreen() {
   const [reportLoading, setReportLoading] = useState(false);
   const [aiReport, setAiReport] = useState<string | null>(null);
 
-  const fetchProgress = useCallback(async () => {
+  const fetchProgress = useCallback(async (silent = false) => {
     try {
       const res = await api.get<ProgressData>(`/api/progress/${userId}`);
       setData(res.data);
     } catch (err) {
       console.error('Progress fetch error:', err);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!silent) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [userId]);
 
+  // Sayfa açıldığında ilk yükleme
   useEffect(() => {
-    fetchProgress();
+    fetchProgress(false);
   }, [fetchProgress]);
+
+  // ⚡ Sekmeye her basıldığında veya ekrana dönüldüğünde arka planda sessizce taze veriyi çek
+  useFocusEffect(
+    useCallback(() => {
+      if (userId) {
+        fetchProgress(true);
+      }
+    }, [userId, fetchProgress])
+  );
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchProgress();
+    fetchProgress(false);
   };
 
   const handleGenerateReport = async (period: 'daily' | 'weekly' | 'monthly') => {
@@ -121,29 +134,43 @@ export function ProgressScreen() {
   const calProgress = Math.min(100, Math.round((currentEatenCal / (targetCal || 1)) * 100));
   const proProgress = Math.min(100, Math.round((Number(totals.total_protein) / (targets.protein_target || 1)) * 100));
 
-  // Tablo İçin Durum Rozetleri
   const proteinDiff = Math.round(Number(targets.protein_target) - Number(totals.total_protein));
   const calDiff = Math.round(targetCal - currentEatenCal);
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: colors.bg }}>
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 170 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 6, paddingBottom: 160 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
-        {/* Başlık */}
-        <View style={{ marginBottom: 18 }}>
-          <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textLow, letterSpacing: 1 }}>GELİŞİM & RAPORLAR</Text>
-          <Text style={{ fontSize: 26, fontWeight: '800', color: colors.textHi, marginTop: 2 }}>Günlük İlerleme</Text>
+        {/* Üst Başlık */}
+        <View style={styles.screenHeader}>
+          <Text style={styles.screenHeaderSub}>GELİŞİM & RAPORLAR</Text>
+          <Text style={styles.screenHeaderTitle}>Günlük İlerleme</Text>
         </View>
 
-        {/* Günün Makro Durumu */}
+        {/* 1. Günün Kalori & Makro Durumu Kartı */}
         <View style={styles.card}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
-            <Text style={styles.cardTitle}>BUGÜNÜN KALORİ ÖZETİ</Text>
-            <Text style={[{ color: colors.textMid, fontSize: 13, fontWeight: '600' }, isCalExceeded && { color: '#EF4444', fontWeight: '800' }]}>
-              {currentEatenCal} / {targetCal} kcal
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.liveIndicatorRow}>
+              <View style={[styles.liveDot, isCalExceeded && { backgroundColor: '#EF4444' }]} />
+              <Text style={[styles.cardTagTitle, isCalExceeded && { color: '#EF4444' }]}>
+                {isCalExceeded ? 'KALORİ HEDEFİ AŞILDI' : 'GÜNLÜK KALORİ DENGESİ'}
+              </Text>
+            </View>
+            <Text style={[styles.percentTag, isCalExceeded && { color: '#EF4444' }]}>
+              %{calProgress}
+            </Text>
+          </View>
+
+          {/* Ortalı Kalori Alanı */}
+          <View style={styles.primaryCalorieBox}>
+            <Text style={[styles.primaryCalorieVal, isCalExceeded && { color: '#EF4444' }]}>
+              {currentEatenCal.toLocaleString('tr-TR')}
+            </Text>
+            <Text style={styles.primaryCalorieSub}>
+              / {targetCal.toLocaleString('tr-TR')} kcal tüketildi
             </Text>
           </View>
 
@@ -153,100 +180,125 @@ export function ProgressScreen() {
                 styles.progressBarFill,
                 {
                   width: `${calProgress}%`,
-                  backgroundColor: isCalExceeded ? '#EF4444' : colors.primary,
+                  backgroundColor: isCalExceeded ? '#EF4444' : '#059669',
                 },
               ]}
             />
           </View>
 
-          {isCalExceeded && (
+          {isCalExceeded ? (
             <View style={styles.exceededBadge}>
               <Ionicons name="alert-circle" size={15} color="#DC2626" />
               <Text style={styles.exceededBadgeText}>
                 Günlük kalori hedefi {exceededAmount} kcal aşıldı!
               </Text>
             </View>
+          ) : (
+            <View style={styles.statusSubTextRow}>
+              <Text style={styles.statusSubText}>
+                {calDiff === 0 ? 'Hedefe tam ulaşıldı!' : `Hedefe ulaşmak için ${calDiff} kcal kaldı`}
+              </Text>
+            </View>
           )}
 
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 14, marginBottom: 8 }}>
-            <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textHi }}>Protein Alımı</Text>
-            <Text style={{ color: colors.textMid, fontSize: 13, fontWeight: '600' }}>
-              {totals.total_protein} / {targets.protein_target}g (%{proProgress})
-            </Text>
-          </View>
-          <View style={styles.progressBarBg}>
-            <View style={[styles.progressBarFill, { width: `${proProgress}%`, backgroundColor: '#38BDF8' }]} />
-          </View>
-
-          <View style={{ flexDirection: 'row', marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: colors.border, gap: 12 }}>
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ color: colors.textLow, fontSize: 11, fontWeight: '600' }}>Karbonhidrat</Text>
-              <Text style={{ color: colors.textHi, fontSize: 15, fontWeight: '700', marginTop: 2 }}>{totals.total_carbs}g</Text>
+          {/* Makro Şeridi */}
+          <View style={styles.macroStripContainer}>
+            <View style={styles.macroItemCol}>
+              <Text style={styles.macroItemLabel}>PROTEİN</Text>
+              <Text style={[styles.macroItemVal, { color: '#059669' }]}>
+                {Math.round(Number(totals.total_protein))}
+                <Text style={styles.macroItemMax}>/{targets.protein_target}g</Text>
+              </Text>
             </View>
-            <View style={{ width: 1, height: '100%', backgroundColor: colors.border }} />
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ color: colors.textLow, fontSize: 11, fontWeight: '600' }}>Sağlıklı Yağ</Text>
-              <Text style={{ color: colors.textHi, fontSize: 15, fontWeight: '700', marginTop: 2 }}>{totals.total_fats}g</Text>
+
+            <View style={styles.macroDivider} />
+
+            <View style={styles.macroItemCol}>
+              <Text style={styles.macroItemLabel}>KARB</Text>
+              <Text style={[styles.macroItemVal, { color: '#0284C7' }]}>
+                {Math.round(Number(totals.total_carbs))}
+                <Text style={styles.macroItemMax}>/{targets.carbs_target}g</Text>
+              </Text>
+            </View>
+
+            <View style={styles.macroDivider} />
+
+            <View style={styles.macroItemCol}>
+              <Text style={styles.macroItemLabel}>SAĞLIKLI YAĞ</Text>
+              <Text style={[styles.macroItemVal, { color: '#D97706' }]}>
+                {Math.round(Number(totals.total_fats))}
+                <Text style={styles.macroItemMax}>/{targets.fats_target}g</Text>
+              </Text>
             </View>
           </View>
         </View>
 
-        {/* AI Tarafından Kaydedilen Yemekler */}
-        <View style={[styles.card, { marginTop: 16 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Ionicons name="restaurant-outline" size={18} color={colors.primary} />
-              <Text style={styles.cardTitle}>BUGÜN YENENLER (AI GÜNLÜK)</Text>
+        {/* 2. AI Tarafından Kaydedilen Yemekler */}
+        <View style={[styles.card, { marginTop: 14 }]}>
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.liveIndicatorRow}>
+              <Ionicons name="restaurant-outline" size={17} color="#059669" />
+              <Text style={styles.cardTagTitle}>BUGÜN YENENLER (AI GÜNLÜK)</Text>
             </View>
-            <Text style={{ fontSize: 11, color: colors.textLow }}>{data?.today.meals.length || 0} Öğün</Text>
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{data?.today.meals.length || 0} Öğün</Text>
+            </View>
           </View>
 
           {data?.today.meals && data.today.meals.length > 0 ? (
-            data.today.meals.map((m) => (
-              <View key={m.id} style={styles.mealItem}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.textHi, fontSize: 14, fontWeight: '700' }}>{m.food_name}</Text>
-                  <Text style={{ color: colors.textLow, fontSize: 12, marginTop: 2 }}>
-                    Saat {m.time} · {m.protein_g}g Protein · {m.carbs_g}g Karb
-                  </Text>
+            <View style={{ marginTop: 4 }}>
+              {data.today.meals.map((m, idx) => (
+                <View
+                  key={m.id}
+                  style={[
+                    styles.mealItemRow,
+                    idx === data.today.meals.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                >
+                  <View style={{ flex: 1, paddingRight: 8 }}>
+                    <Text style={styles.mealItemTitle} numberOfLines={1}>{m.food_name}</Text>
+                    <Text style={styles.mealItemMeta}>
+                      Saat {m.time} · {m.protein_g}g Protein · {m.carbs_g}g Karb
+                    </Text>
+                  </View>
+                  <View style={styles.badgeCal}>
+                    <Text style={styles.badgeCalText}>+{m.calories} kcal</Text>
+                  </View>
                 </View>
-                <View style={styles.badgeCal}>
-                  <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '700' }}>+{m.calories} kcal</Text>
-                </View>
-              </View>
-            ))
+              ))}
+            </View>
           ) : (
-            <View style={{ paddingVertical: 18, alignItems: 'center' }}>
-              <Ionicons name="chatbubble-ellipses-outline" size={28} color={colors.textLow} />
-              <Text style={{ color: colors.textMid, fontSize: 13, marginTop: 8, textAlign: 'center' }}>
-                Bugün henüz bir şey yazmadın.
-              </Text>
-              <Text style={{ color: colors.textLow, fontSize: 11, marginTop: 2, textAlign: 'center' }}>
-                AI Koç'a "150 gr tavuk pilav yedim" yaz, otomatik buraya eklensin.
+            <View style={styles.emptyMealBox}>
+              <Ionicons name="chatbubble-ellipses-outline" size={32} color="#CBD5E1" />
+              <Text style={styles.emptyMealTitle}>Bugün henüz bir öğün kaydetmedin.</Text>
+              <Text style={styles.emptyMealSub}>
+                AI Koç'a "150 gr tavuk pilav yedim" yaz, öğünün otomatik olarak buraya eklensin.
               </Text>
             </View>
           )}
         </View>
 
-        {/* AI Koç Dönemsel Raporu */}
-        <View style={[styles.card, { marginTop: 16 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-            <Ionicons name="sparkles" size={18} color="#F59E0B" />
-            <Text style={[styles.cardTitle, { color: '#B45309' }]}>AI KOÇ ANALİZ RAPORU</Text>
+        {/* 3. AI Koç Dönemsel Raporu */}
+        <View style={[styles.card, { marginTop: 14 }]}>
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.liveIndicatorRow}>
+              <Ionicons name="sparkles" size={17} color="#D97706" />
+              <Text style={[styles.cardTagTitle, { color: '#B45309' }]}>AI KOÇ ANALİZ RAPORU</Text>
+            </View>
           </View>
 
-          <Text style={{ color: colors.textMid, fontSize: 13, lineHeight: 18, marginBottom: 14 }}>
-            Beslenme disiplinini net veriler ve stratejik koçluk geri bildirimiyle incele.
+          <Text style={styles.reportIntroText}>
+            Beslenme disiplinini net veriler ve kişiselleştirilmiş koçluk geri bildirimiyle incele.
           </Text>
 
           {/* Dönem Butonları */}
-          <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+          <View style={styles.periodTabsRow}>
             <Pressable
               onPress={() => handleGenerateReport('daily')}
               disabled={reportLoading}
-              style={[styles.reportBtn, reportPeriod === 'daily' && styles.reportBtnActive]}
+              style={[styles.periodTabBtn, reportPeriod === 'daily' && styles.periodTabBtnActive]}
             >
-              <Text style={[styles.reportBtnText, reportPeriod === 'daily' && styles.reportBtnTextActive]}>
+              <Text style={[styles.periodTabBtnText, reportPeriod === 'daily' && styles.periodTabBtnTextActive]}>
                 Günlük Rapor
               </Text>
             </Pressable>
@@ -254,9 +306,9 @@ export function ProgressScreen() {
             <Pressable
               onPress={() => handleGenerateReport('weekly')}
               disabled={reportLoading}
-              style={[styles.reportBtn, reportPeriod === 'weekly' && styles.reportBtnActive]}
+              style={[styles.periodTabBtn, reportPeriod === 'weekly' && styles.periodTabBtnActive]}
             >
-              <Text style={[styles.reportBtnText, reportPeriod === 'weekly' && styles.reportBtnTextActive]}>
+              <Text style={[styles.periodTabBtnText, reportPeriod === 'weekly' && styles.periodTabBtnTextActive]}>
                 Haftalık Rapor
               </Text>
             </Pressable>
@@ -264,27 +316,26 @@ export function ProgressScreen() {
             <Pressable
               onPress={() => handleGenerateReport('monthly')}
               disabled={reportLoading}
-              style={[styles.reportBtn, reportPeriod === 'monthly' && styles.reportBtnActive]}
+              style={[styles.periodTabBtn, reportPeriod === 'monthly' && styles.periodTabBtnActive]}
             >
-              <Text style={[styles.reportBtnText, reportPeriod === 'monthly' && styles.reportBtnTextActive]}>
+              <Text style={[styles.periodTabBtnText, reportPeriod === 'monthly' && styles.periodTabBtnTextActive]}>
                 Aylık Rapor
               </Text>
             </Pressable>
           </View>
 
           {reportLoading && (
-            <View style={{ paddingVertical: 24, alignItems: 'center', gap: 8 }}>
-              <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={{ color: colors.textMid, fontSize: 13, fontWeight: '600' }}>
+            <View style={styles.reportLoadingBox}>
+              <ActivityIndicator size="small" color="#059669" />
+              <Text style={styles.reportLoadingText}>
                 AI Koç verilerini analiz edip tabloyu hazırlıyor…
               </Text>
             </View>
           )}
 
-          {/* ⚡ RAPOR AÇILDIĞINDA GÖRÜNEN YENİ UI / UX BÖLÜMÜ */}
+          {/* ⚡ RAPOR VERİ TABLOSU VE İÇGÖRÜLER */}
           {aiReport && !reportLoading && (
-            <View style={{ marginTop: 6 }}>
-              {/* 1. NET DURUM TABLOSU */}
+            <View style={{ marginTop: 10 }}>
               <View style={styles.tableCard}>
                 <View style={styles.tableHeaderRow}>
                   <Text style={[styles.tableHeadCell, { flex: 1.2 }]}>METRİK</Text>
@@ -293,7 +344,7 @@ export function ProgressScreen() {
                   <Text style={[styles.tableHeadCell, { textAlign: 'right' }]}>DURUM</Text>
                 </View>
 
-                {/* Kalori Satırı */}
+                {/* Kalori */}
                 <View style={styles.tableBodyRow}>
                   <Text style={[styles.tableBodyName, { flex: 1.2 }]}>🔥 Kalori</Text>
                   <Text style={styles.tableBodyVal}>{targetCal}</Text>
@@ -307,7 +358,7 @@ export function ProgressScreen() {
                   </View>
                 </View>
 
-                {/* Protein Satırı */}
+                {/* Protein */}
                 <View style={styles.tableBodyRow}>
                   <Text style={[styles.tableBodyName, { flex: 1.2 }]}>🥩 Protein</Text>
                   <Text style={styles.tableBodyVal}>{targets.protein_target}g</Text>
@@ -321,19 +372,21 @@ export function ProgressScreen() {
                   </View>
                 </View>
 
-                {/* Karbonhidrat Satırı */}
+                {/* Karbonhidrat */}
                 <View style={styles.tableBodyRow}>
                   <Text style={[styles.tableBodyName, { flex: 1.2 }]}>🌾 Karb</Text>
                   <Text style={styles.tableBodyVal}>{targets.carbs_target}g</Text>
                   <Text style={styles.tableBodyVal}>{Math.round(Number(totals.total_carbs))}g</Text>
                   <View style={{ flex: 1, alignItems: 'flex-end' }}>
                     <View style={[styles.statusPill, styles.pillSlate]}>
-                      <Text style={[styles.statusPillText, styles.pillTextSlate]}>%{Math.round((totals.total_carbs / (targets.carbs_target || 1)) * 100)}</Text>
+                      <Text style={[styles.statusPillText, styles.pillTextSlate]}>
+                        %{Math.round((totals.total_carbs / (targets.carbs_target || 1)) * 100)}
+                      </Text>
                     </View>
                   </View>
                 </View>
 
-                {/* Yağ Satırı */}
+                {/* Yağ */}
                 <View style={[styles.tableBodyRow, { borderBottomWidth: 0 }]}>
                   <Text style={[styles.tableBodyName, { flex: 1.2 }]}>🥑 Yağ</Text>
                   <Text style={styles.tableBodyVal}>{targets.fats_target}g</Text>
@@ -348,7 +401,6 @@ export function ProgressScreen() {
                 </View>
               </View>
 
-              {/* 2. OKUNABİLİR KOÇ İÇGÖRÜ KARTLARI */}
               <ReportCardsViewer report={aiReport} />
             </View>
           )}
@@ -358,23 +410,19 @@ export function ProgressScreen() {
   );
 }
 
-// ⚡ Ham Metni Ayrıştırıp Modern UI Kartlarına Çeviren Bileşen
 function ReportCardsViewer({ report }: { report: string }) {
   const cleanReport = report
     .replace(/^Selam.*?değerlendirmemiz:\s*/i, '')
     .trim();
 
-  // Maddeleri böl
   const rawSections = cleanReport.split(/\n(?=\s*[\*\-]\s*\*\*)/g);
 
   return (
-    <View style={{ gap: 12, marginTop: 14 }}>
+    <View style={{ gap: 10, marginTop: 12 }}>
       {rawSections.map((sec, idx) => {
         const titleMatch = sec.match(/[\*\-]\s*\*\*(.*?)\*\*:?/);
         const title = titleMatch ? titleMatch[1].replace(/:$/, '').trim() : '';
         let body = sec.replace(/[\*\-]\s*\*\*.*?\*\*:?/, '').trim();
-
-        // Fazla markdown işaretlerini temizle
         body = body.replace(/\*\*/g, '').replace(/^\s*[\*\-]\s*/gm, '• ');
 
         let iconName: any = 'bulb-outline';
@@ -402,7 +450,7 @@ function ReportCardsViewer({ report }: { report: string }) {
           <View key={idx} style={[styles.aiCard, { backgroundColor: cardBg, borderColor }]}>
             {title ? (
               <View style={styles.aiCardHeader}>
-                <Ionicons name={iconName} size={16} color={badgeColor} />
+                <Ionicons name={iconName} size={15} color={badgeColor} />
                 <Text style={[styles.aiCardTitle, { color: badgeColor }]}>{title.toUpperCase()}</Text>
               </View>
             ) : null}
@@ -416,29 +464,110 @@ function ReportCardsViewer({ report }: { report: string }) {
 
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
+  // Ekran Başlığı
+  screenHeader: {
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  screenHeaderSub: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#059669',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  screenHeaderTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#111827',
+    marginTop: 2,
+  },
+
+  // Kart Çerçevesi
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 24,
+    borderRadius: 22,
     padding: 18,
-    borderWidth: 1.5,
-    borderColor: 'rgba(226, 232, 240, 0.8)',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.03,
     shadowRadius: 8,
     elevation: 2,
   },
-  cardTitle: { fontSize: 11, fontWeight: '800', color: colors.textLow, letterSpacing: 0.8 },
-  progressBarBg: {
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.surface2,
-    overflow: 'hidden',
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
   },
-  progressBarFill: { height: '100%', borderRadius: 4 },
+  liveIndicatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#10B981',
+  },
+  cardTagTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#6B7280',
+    letterSpacing: 0.8,
+  },
+  percentTag: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#6B7280',
+  },
+
+  // Ortalı Kalori Bloğu
+  primaryCalorieBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 4,
+  },
+  primaryCalorieVal: {
+    fontSize: 36,
+    fontWeight: '900',
+    color: '#111827',
+    letterSpacing: -0.5,
+  },
+  primaryCalorieSub: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginTop: 1,
+  },
+  progressBarBg: {
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#F3F4F6',
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  statusSubTextRow: {
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  statusSubText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
   exceededBadge: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
     backgroundColor: '#FEF2F2',
     borderWidth: 1,
@@ -453,91 +582,200 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#DC2626',
   },
-  mealItem: {
+
+  // Makro Şeridi
+  macroStripContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+  },
+  macroItemCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  macroItemLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#6B7280',
+    letterSpacing: 0.6,
+    marginBottom: 2,
+  },
+  macroItemVal: {
+    fontSize: 13.5,
+    fontWeight: '800',
+  },
+  macroItemMax: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: '#9CA3AF',
+  },
+  macroDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#E5E7EB',
+    alignSelf: 'center',
+  },
+
+  // Yemek Öğeleri
+  countBadge: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  countBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4B5563',
+  },
+  mealItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: colors.surface2,
+    borderBottomColor: '#F3F4F6',
+  },
+  mealItemTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  mealItemMeta: {
+    color: '#6B7280',
+    fontSize: 11.5,
+    marginTop: 2,
   },
   badgeCal: {
     backgroundColor: '#ECFDF5',
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 4,
-    borderRadius: 12,
+    borderRadius: 10,
   },
-  reportBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 14,
-    backgroundColor: colors.surface2,
+  badgeCalText: {
+    color: '#059669',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  emptyMealBox: {
+    paddingVertical: 20,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
+    justifyContent: 'center',
+    gap: 4,
   },
-  reportBtnActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  reportBtnText: {
-    fontSize: 12.5,
+  emptyMealTitle: {
+    color: '#4B5563',
+    fontSize: 13,
     fontWeight: '700',
-    color: colors.textMid,
+    marginTop: 6,
+    textAlign: 'center',
   },
-  reportBtnTextActive: {
-    color: '#FFFFFF',
+  emptyMealSub: {
+    color: '#9CA3AF',
+    fontSize: 11.5,
+    textAlign: 'center',
+    paddingHorizontal: 16,
+    lineHeight: 16,
   },
 
-  // ⚡ Tablo Tasarımı
+  // Rapor Bölümü
+  reportIntroText: {
+    color: '#6B7280',
+    fontSize: 12.5,
+    lineHeight: 17,
+    marginBottom: 12,
+  },
+  periodTabsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  periodTabBtn: {
+    flex: 1,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  periodTabBtnActive: {
+    backgroundColor: '#059669',
+  },
+  periodTabBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4B5563',
+  },
+  periodTabBtnTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  reportLoadingBox: {
+    paddingVertical: 20,
+    alignItems: 'center',
+    gap: 6,
+  },
+  reportLoadingText: {
+    color: '#6B7280',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // Tablo
   tableCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#E5E7EB',
     overflow: 'hidden',
   },
   tableHeaderRow: {
     flexDirection: 'row',
-    backgroundColor: '#F8FAFC',
-    paddingVertical: 9,
+    backgroundColor: '#F9FAFB',
+    paddingVertical: 8,
     paddingHorizontal: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: '#E5E7EB',
   },
   tableHeadCell: {
     flex: 1,
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '800',
-    color: '#64748B',
+    color: '#6B7280',
     letterSpacing: 0.5,
   },
   tableBodyRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 9,
     paddingHorizontal: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: '#F3F4F6',
   },
   tableBodyName: {
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#111827',
   },
   tableBodyVal: {
     flex: 1,
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '600',
-    color: '#334155',
+    color: '#374151',
   },
   statusPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
   },
   statusPillText: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '800',
   },
   pillGreen: { backgroundColor: '#ECFDF5' },
@@ -546,30 +784,30 @@ const styles = StyleSheet.create({
   pillTextRed: { color: '#DC2626' },
   pillAmber: { backgroundColor: '#FFFBEB' },
   pillTextAmber: { color: '#D97706' },
-  pillSlate: { backgroundColor: '#F1F5F9' },
-  pillTextSlate: { color: '#475569' },
+  pillSlate: { backgroundColor: '#F3F4F6' },
+  pillTextSlate: { color: '#4B5563' },
 
-  // ⚡ Koç İçgörü Kartları
+  // AI Tavsiye Kartları
   aiCard: {
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 14,
+    padding: 12,
     borderWidth: 1,
   },
   aiCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
+    gap: 5,
+    marginBottom: 4,
   },
   aiCardTitle: {
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   aiCardBody: {
-    fontSize: 13.5,
+    fontSize: 12.5,
     color: '#334155',
-    lineHeight: 20.5,
+    lineHeight: 18,
   },
 });
 

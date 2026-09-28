@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -26,6 +26,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../api/client';
 import { useUserStore } from '../store/userStore';
 import DietCoLogo from '../components/DietCoLogo';
+import { colors } from '../theme/colors';
 
 const { width, height } = Dimensions.get('window');
 
@@ -65,7 +66,6 @@ export const HomeScreen = () => {
   const user = useUserStore((s) => s.user);
   const userId = Number(user?.id) || 1;
 
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [data, setData] = useState<any>(null);
 
@@ -100,7 +100,7 @@ export const HomeScreen = () => {
     return MOTIVATION_QUOTES[dayOfYear % MOTIVATION_QUOTES.length];
   }, []);
 
-  // 🔥 Streak Takibi (Kullanıcıya Özel ve Saat Farkına Dayanıklı)
+  // 🔥 Streak Takibi
   const [streakCount, setStreakCount] = useState<number>(1);
 
   useEffect(() => {
@@ -117,15 +117,12 @@ export const HomeScreen = () => {
         let currentStreak = savedStreak ? parseInt(savedStreak, 10) : 1;
 
         if (!lastLogin) {
-          // İlk kez giriş yapılıyor
           currentStreak = 1;
           await AsyncStorage.setItem(LAST_LOGIN_KEY, todayStr);
           await AsyncStorage.setItem(STREAK_KEY, '1');
         } else if (lastLogin === todayStr) {
-          // Bugün zaten giriş yapılmış; seriyi asla artırma, mevcut seriyi koru
           currentStreak = Math.max(1, currentStreak);
         } else {
-          // İki gün arasındaki tam takvim günü farkı
           const [lastY, lastM, lastD] = lastLogin.split('-').map(Number);
           const [todayY, todayM, todayD] = todayStr.split('-').map(Number);
 
@@ -134,10 +131,8 @@ export const HomeScreen = () => {
           const diffDays = Math.round((todayDateUtc - lastDateUtc) / (1000 * 60 * 60 * 24));
 
           if (diffDays === 1) {
-            // Dün giriş yapılmış, seri 1 gün uzadı
             currentStreak += 1;
           } else if (diffDays > 1) {
-            // 1 günden fazla ara verilmiş, seri sıfırlandı
             currentStreak = 1;
           }
 
@@ -179,66 +174,113 @@ export const HomeScreen = () => {
     return { name: 'Akşam Yemeği', time: '19:30', icon: 'moon-outline' };
   }, []);
 
-  // frontend/src/screens/HomeScreen.tsx
+  const fetchDashboard = useCallback(async (silent = false) => {
+    if (!userId) return;
 
-const fetchDashboard = useCallback(async () => {
-  // 🛑 Kullanıcı ID hazır değilse boşuna istek atıp 400 alma:
-  if (!userId) return;
+    try {
+      const res = await api.get(`/api/dashboard?userId=${userId}`);
+      if (res?.data) {
+        setData(res.data);
+        if (res.data.waterConsumed !== undefined) {
+          setWaterMl(Number(res.data.waterConsumed));
+        }
 
-  try {
-    const res = await api.get(`/api/dashboard?userId=${userId}`);
-    setData(res.data);
-    if (res.data?.waterConsumed !== undefined) {
-      setWaterMl(Number(res.data.waterConsumed));
+        const now = new Date();
+        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        await AsyncStorage.setItem(`@dietco_dashboard_cache_${userId}`, JSON.stringify(res.data));
+        await AsyncStorage.setItem(`@dietco_dashboard_date_${userId}`, todayStr);
+      }
+    } catch (err) {
+      console.error('Dashboard senkronizasyon hatası:', err);
+    } finally {
+      if (!silent) setRefreshing(false);
     }
-  } catch (err) {
-    console.error('Dashboard hatası:', err);
-  } finally {
-    setLoading(false);
-    setRefreshing(false);
-  }
-}, [userId]);
-
-useEffect(() => {
-  if (userId) {
-    fetchDashboard();
-  }
-}, [userId, fetchDashboard]);
+  }, [userId]);
 
   useEffect(() => {
-    fetchDashboard();
-  }, [fetchDashboard]);
+    const initData = async () => {
+      if (!userId) return;
+
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const CACHE_DATE_KEY = `@dietco_dashboard_date_${userId}`;
+
+      try {
+        const cachedDate = await AsyncStorage.getItem(CACHE_DATE_KEY);
+        const cached = await AsyncStorage.getItem(`@dietco_dashboard_cache_${userId}`);
+
+        // Eğer önbellek dünden kalmaysa su sayacını sıfırdan başlat
+        if (cachedDate === todayStr && cached) {
+          const parsed = JSON.parse(cached);
+          setData(parsed);
+          if (parsed?.waterConsumed !== undefined) {
+            setWaterMl(Number(parsed.waterConsumed));
+          }
+        } else {
+          setWaterMl(0); // Yeni güne geçilmiş, anında 0 yap
+        }
+      } catch (_) {}
+
+      fetchDashboard(true);
+    };
+
+    initData();
+  }, [userId, fetchDashboard]);
+
+  // 2. ⚡ KESİNTİSİZ SENKRONİZASYON (Sekmeye her tıklandığında anında güncelle)
+  useFocusEffect(
+    useCallback(() => {
+      if (userId) {
+        fetchDashboard(true);
+      }
+    }, [userId, fetchDashboard])
+  );
 
   const onRefresh = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setRefreshing(true);
-    fetchDashboard();
+    fetchDashboard(false);
   };
 
-  // 💧 +250 ML Su Ekleme Fonksiyonu
   const handleAddWater = async () => {
     if (waterAdding) return;
     setWaterAdding(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    const newWater = waterMl + 250;
-    setWaterMl(newWater);
+    // ⚡ İyimser (Optimistic) Anında Güncelleme: Kullanıcı hiç beklemesin
+    const prevWater = waterMl;
+    const optimisticWater = prevWater + 250;
+    setWaterMl(optimisticWater);
 
     try {
-      await api.post('/api/water/add', {
+      const res = await api.post('/api/water/add', {
         userId,
         amount: 250,
       });
+
+      // Sunucudan gelen kesin miktarı eşitle (dashboard çağrısı beklemeye gerek yok)
+      if (res.data?.waterConsumed !== undefined) {
+        const finalWater = Number(res.data.waterConsumed);
+        setWaterMl(finalWater);
+        
+        // Cache'i de hemen güncelle
+        setData((prev: any) => ({
+          ...prev,
+          waterConsumed: finalWater,
+        }));
+      }
+
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
-      setWaterMl((prev) => Math.max(0, prev - 250));
+      // Hata olursa eski değere geri al
+      setWaterMl(prevWater);
       console.log('Su kaydedilemedi:', err);
     } finally {
+      // Her durumda kilidi kaldır
       setWaterAdding(false);
     }
   };
 
-  // 🍽️ Hızlı Öğün Gönderimi (Yemek + Gram Entegrasyonu)
   const handleQuickMealSubmit = async () => {
     const meal = quickMeal.trim();
     if (!meal || mealLogging) return;
@@ -256,6 +298,22 @@ useEffect(() => {
         userId,
       });
 
+      // ⚡ Optimistic Anında Güncelleme (Gelen kalori varsa anında state'e ekle, sayfa hemen güncellensin)
+      if (res.data?.loggedItem) {
+        const addedCal = Number(res.data.loggedItem.calories) || 0;
+        const addedProtein = Number(res.data.loggedItem.protein_g) || 0;
+        const addedCarbs = Number(res.data.loggedItem.carbs_g) || 0;
+        const addedFats = Number(res.data.loggedItem.fats_g) || 0;
+
+        setData((prev: any) => ({
+          ...prev,
+          caloriesConsumed: (Number(prev?.caloriesConsumed) || 0) + addedCal,
+          proteinConsumed: (Number(prev?.proteinConsumed) || 0) + addedProtein,
+          carbsConsumed: (Number(prev?.carbsConsumed) || 0) + addedCarbs,
+          fatConsumed: (Number(prev?.fatConsumed) || 0) + addedFats,
+        }));
+      }
+
       setQuickMeal('');
       setQuickAmount('');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -265,21 +323,15 @@ useEffect(() => {
           ? `${res.data.loggedItem.food_name} (+${res.data.loggedItem.calories} kcal) eklendi!`
           : 'Öğününüz işlendi.'
       );
-      fetchDashboard();
+      
+      // Arkada sunucudan taze toplamları çek
+      fetchDashboard(true);
     } catch (err: any) {
       Alert.alert('Hata', 'Öğün eklenemedi: ' + (err?.message || 'Hata oluştu'));
     } finally {
       setMealLogging(false);
     }
   };
-
-  if (loading && !refreshing) {
-    return (
-      <View style={[styles.center, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color="#059669" />
-      </View>
-    );
-  }
 
   const consumedCal = Number(data?.caloriesConsumed) || 0;
   const targetCal = Number(data?.caloriesTarget || user?.calorie_target) || 2200;
@@ -306,7 +358,6 @@ useEffect(() => {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <ScrollView
           style={styles.scrollView}
@@ -352,8 +403,8 @@ useEffect(() => {
           <View style={styles.appleHeroWidget}>
             <View style={styles.heroHeader}>
               <View style={styles.liveIndicatorRow}>
-                <View style={[styles.liveGreenDot, isExceeded && { backgroundColor: '#EF4444' }]} />
-                <Text style={[styles.heroSectionTitle, isExceeded && { color: '#EF4444' }]}>
+                <View style={[styles.liveDot, isExceeded && { backgroundColor: '#EF4444' }]} />
+                <Text style={[styles.sectionCaption, isExceeded && { color: '#EF4444' }]}>
                   {isExceeded ? 'KALORİ HEDEFİ AŞILDI' : 'GÜNLÜK KALORİ DENGESİ'}
                 </Text>
               </View>
@@ -363,15 +414,15 @@ useEffect(() => {
             </View>
 
             <View style={styles.primaryCalorieDisplay}>
-              <Text style={[styles.remainingCalorieNumber, isExceeded && { color: '#EF4444' }]}>
+              <Text style={[styles.targetCaloriesText, isExceeded && { color: '#EF4444' }]}>
                 {isExceeded ? `+${exceededAmount.toLocaleString('tr-TR')}` : remainingCal.toLocaleString('tr-TR')}
               </Text>
-              <Text style={[styles.remainingCalorieLabel, isExceeded && { color: '#DC2626', fontWeight: '700' }]}>
+              <Text style={[styles.remainingCalorieLabel, isExceeded && { color: '#DC2626' }]}>
                 {isExceeded ? 'kcal aşıldı' : 'kcal kaldı'}
               </Text>
             </View>
 
-            <View style={styles.progressTrack}>
+            <View style={styles.progressBg}>
               <View
                 style={[
                   styles.progressFill,
@@ -407,9 +458,20 @@ useEffect(() => {
             </View>
 
             <View style={styles.macroStrip}>
-              <MacroInline label="Protein" val={proteinConsumed} max={proteinTarget} color="#059669" />
-              <MacroInline label="Karb" val={carbsConsumed} max={carbsTarget} color="#0284C7" />
-              <MacroInline label="Yağ" val={fatConsumed} max={fatTarget} color="#D97706" />
+              <MacroPill
+                label="Protein"
+                value={`${Math.round(proteinConsumed)} / ${proteinTarget}g`}
+                highlight={proteinConsumed >= proteinTarget}
+              />
+              <MacroPill
+                label="Karb"
+                value={`${Math.round(carbsConsumed)} / ${carbsTarget}g`}
+              />
+              <MacroPill
+                label="Yağ"
+                value={`${Math.round(fatConsumed)} / ${fatTarget}g`}
+                danger={fatConsumed > fatTarget}
+              />
             </View>
           </View>
 
@@ -423,8 +485,9 @@ useEffect(() => {
                 
                 <TouchableOpacity
                   onPress={handleAddWater}
-                  activeOpacity={0.7}
-                  style={styles.addWaterBtn}
+                  disabled={waterAdding}
+                  activeOpacity={0.6}
+                  style={[styles.addWaterBtn, waterAdding && { opacity: 0.6 }]}
                 >
                   <Ionicons name="add" size={14} color="#0284C7" />
                   <Text style={styles.addWaterBtnText}>250 ml</Text>
@@ -451,8 +514,8 @@ useEffect(() => {
                   size={12}
                   color={isWaterLow ? '#EA580C' : '#0284C7'}
                 />
-                <Text style={[styles.waterFooterText, isWaterLow && { color: '#EA580C', fontWeight: '700' }]}>
-                  {isWaterLow ? 'Su tüketimin az kaldı!' : 'Hedef: ' + aiWaterTargetLiters + ' Litre'}
+                <Text style={[styles.waterFooterText, isWaterLow && { color: '#EA580C' }]}>
+                  {isWaterLow ? 'Su tüketimin çok az!' : 'Hedef: ' + aiWaterTargetLiters + ' Litre'}
                 </Text>
               </View>
             </View>
@@ -475,7 +538,7 @@ useEffect(() => {
             </Pressable>
           </View>
 
-          {/* 3. Hızlı Eylem Çubuğu: Yemek İkonu + Ne Yedin + Kaç Gram */}
+          {/* 3. Hızlı Eylem Çubuğu: Anlık Ne Yedin */}
           <View style={styles.quickActionCard}>
             <View style={styles.foodIconBtn}>
               <Ionicons name="restaurant" size={18} color="#059669" />
@@ -484,7 +547,7 @@ useEffect(() => {
             <TextInput
               style={styles.quickInput}
               placeholder="Ne yedin? (Tavuk pilav...)"
-              placeholderTextColor="#94A3B8"
+              placeholderTextColor="#9CA3AF"
               value={quickMeal}
               onChangeText={setQuickMeal}
               editable={!mealLogging}
@@ -494,7 +557,7 @@ useEffect(() => {
               <TextInput
                 style={styles.amountInput}
                 placeholder="Gram"
-                placeholderTextColor="#94A3B8"
+                placeholderTextColor="#9CA3AF"
                 keyboardType="numeric"
                 value={quickAmount}
                 onChangeText={setQuickAmount}
@@ -551,23 +614,30 @@ useEffect(() => {
   );
 };
 
-function MacroInline({
+function MacroPill({
   label,
-  val,
-  max,
-  color,
+  value,
+  highlight,
+  danger,
 }: {
   label: string;
-  val: number;
-  max: number;
-  color: string;
+  value: string;
+  highlight?: boolean;
+  danger?: boolean;
 }) {
   return (
-    <View style={styles.macroCol}>
-      <Text style={styles.macroLabel}>{label}</Text>
-      <Text style={[styles.macroValue, { color }]}>
-        {Math.round(val)}
-        <Text style={styles.macroMax}>/{max}g</Text>
+    <View
+      style={[
+        styles.macroPill,
+        highlight && { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0', borderWidth: 1 },
+        danger && { backgroundColor: '#FEF2F2', borderColor: '#FECACA', borderWidth: 1 },
+      ]}
+    >
+      <Text style={[styles.macroPillLabel, highlight && { color: '#059669' }, danger && { color: '#DC2626' }]}>
+        {label.toUpperCase()}
+      </Text>
+      <Text style={[styles.macroPillValue, highlight && { color: '#059669' }, danger && { color: '#DC2626' }]}>
+        {value}
       </Text>
     </View>
   );
@@ -580,12 +650,6 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
   },
   cardPressed: {
     transform: [{ scale: 0.98 }],
@@ -637,16 +701,16 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   motivationBadgeText: {
-    fontSize: 8,
-    fontWeight: '900',
+    fontSize: 8.5,
+    fontWeight: '800',
     color: '#059669',
     letterSpacing: 0.5,
   },
   motivationQuoteText: {
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: '600',
     color: '#475569',
-    lineHeight: 13.5,
+    lineHeight: 14,
     textAlign: 'right',
   },
   headerRightCol: {
@@ -677,8 +741,8 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   streakNumber: {
-    fontSize: 13,
-    fontWeight: '900',
+    fontSize: 13.5,
+    fontWeight: '800',
     color: '#EA580C',
     lineHeight: 15,
   },
@@ -690,15 +754,15 @@ const styles = StyleSheet.create({
   },
 
   appleHeroWidget: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
     padding: 20,
-    borderWidth: 1.5,
-    borderColor: 'rgba(226, 232, 240, 0.8)',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.03,
-    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
     elevation: 2,
     marginBottom: 14,
   },
@@ -706,62 +770,65 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   liveIndicatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  liveGreenDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
     backgroundColor: '#10B981',
   },
-  heroSectionTitle: {
+  sectionCaption: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#64748B',
+    color: '#6B7280',
     letterSpacing: 0.8,
   },
   heroPercentage: {
     fontSize: 13,
     fontWeight: '800',
-    color: '#0F172A',
+    color: '#6B7280',
   },
   primaryCalorieDisplay: {
     alignItems: 'center',
-    marginBottom: 14,
+    justifyContent: 'center',
+    marginBottom: 10,
   },
-  remainingCalorieNumber: {
-    fontSize: 42,
+  targetCaloriesText: {
+    fontSize: 34,
     fontWeight: '900',
-    color: '#059669',
-    letterSpacing: -1,
+    color: '#111827',
+    letterSpacing: -0.5,
+    textAlign: 'center',
   },
   remainingCalorieLabel: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
-    color: '#64748B',
-    marginTop: -2,
+    color: '#6B7280',
+    marginTop: 2,
+    textAlign: 'center',
   },
-  progressTrack: {
-    height: 6,
-    backgroundColor: '#F1F5F9',
-    borderRadius: 3,
+  progressBg: {
+    height: 8,
+    marginTop: 4,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
     overflow: 'hidden',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   progressFill: {
     height: '100%',
     backgroundColor: '#059669',
-    borderRadius: 3,
+    borderRadius: 8,
   },
   exceededBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: 6,
     backgroundColor: '#FEF2F2',
     borderWidth: 1,
@@ -782,7 +849,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: '#F8FAFC',
+    borderTopColor: '#F9FAFB',
     marginBottom: 12,
   },
   bottomStatCol: {
@@ -791,44 +858,45 @@ const styles = StyleSheet.create({
   bottomStatValue: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#0F172A',
+    color: '#111827',
   },
   bottomStatTitle: {
     fontSize: 11,
-    color: '#94A3B8',
+    color: '#6B7280',
     fontWeight: '600',
     marginTop: 2,
   },
   statSeparator: {
     width: 1,
     height: 22,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#F3F4F6',
   },
   macroStrip: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: '#F8FAFC',
+    gap: 10,
+    marginTop: 4,
+  },
+  macroPill: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
     borderRadius: 14,
     paddingVertical: 10,
-    paddingHorizontal: 14,
-  },
-  macroCol: {
+    paddingHorizontal: 8,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
   },
-  macroLabel: {
-    fontSize: 11,
-    color: '#64748B',
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  macroValue: {
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  macroMax: {
+  macroPillLabel: {
     fontSize: 10,
-    color: '#94A3B8',
-    fontWeight: '600',
+    fontWeight: '700',
+    color: '#6B7280',
+    letterSpacing: 0.8,
+  },
+  macroPillValue: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#111827',
+    marginTop: 2,
   },
 
   bentoRow: {
@@ -838,14 +906,14 @@ const styles = StyleSheet.create({
   },
   bentoSquare: {
     flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 16,
-    borderWidth: 1.5,
-    borderColor: 'rgba(226, 232, 240, 0.8)',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.02,
+    shadowOpacity: 0.03,
     shadowRadius: 8,
     justifyContent: 'space-between',
     minHeight: 145,
@@ -856,8 +924,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   waterIconContainer: {
-    width: 30,
-    height: 30,
+    width: 32,
+    height: 32,
     borderRadius: 10,
     backgroundColor: '#E0F2FE',
     alignItems: 'center',
@@ -870,43 +938,38 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#BAE6FD',
     gap: 2,
   },
   addWaterBtnText: {
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: '800',
     color: '#0284C7',
   },
   waterTargetAmount: {
     fontSize: 17,
-    fontWeight: '900',
+    fontWeight: '800',
     color: '#0284C7',
-    letterSpacing: -0.2,
   },
   waterTargetSub: {
     fontSize: 11.5,
-    color: '#94A3B8',
-    fontWeight: '700',
+    color: '#6B7280',
+    fontWeight: '600',
   },
   waterProgressTrack: {
-    height: 5,
+    height: 6,
     backgroundColor: '#F0F9FF',
-    borderRadius: 2.5,
+    borderRadius: 3,
     overflow: 'hidden',
     marginTop: 6,
-    borderWidth: 0.5,
-    borderColor: '#BAE6FD',
   },
   waterProgressFill: {
     height: '100%',
     backgroundColor: '#0284C7',
-    borderRadius: 2.5,
+    borderRadius: 3,
   },
   waterGlassCountText: {
-    fontSize: 10,
-    color: '#64748B',
+    fontSize: 10.5,
+    color: '#6B7280',
     fontWeight: '600',
     marginTop: 4,
   },
@@ -918,20 +981,20 @@ const styles = StyleSheet.create({
   },
   waterFooterText: {
     fontSize: 10,
-    color: '#94A3B8',
+    color: '#6B7280',
     fontWeight: '600',
   },
 
   bentoSquareTitle: {
     fontSize: 17,
     fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: -0.2,
+    color: '#111827',
   },
   bentoSquareSub: {
     fontSize: 12,
-    color: '#64748B',
+    color: '#6B7280',
     fontWeight: '500',
+    marginTop: 1,
   },
   bentoActionTag: {
     fontSize: 11.5,
@@ -943,15 +1006,15 @@ const styles = StyleSheet.create({
   quickActionCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: Platform.OS === 'ios' ? 8 : 6,
-    borderWidth: 1.5,
-    borderColor: 'rgba(226, 232, 240, 0.8)',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.02,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
     shadowRadius: 8,
     marginBottom: 14,
     gap: 8,
@@ -967,15 +1030,15 @@ const styles = StyleSheet.create({
   quickInput: {
     flex: 1,
     fontSize: 13,
-    color: '#0F172A',
+    color: '#111827',
     paddingVertical: 4,
   },
   amountInputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#F9FAFB',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#E5E7EB',
     borderRadius: 12,
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -985,37 +1048,37 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#111827',
     textAlign: 'center',
     padding: 0,
   },
   amountSuffix: {
     fontSize: 11,
-    color: '#94A3B8',
-    fontWeight: '700',
+    color: '#6B7280',
+    fontWeight: '600',
     marginLeft: 2,
   },
   sendActionBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     backgroundColor: '#059669',
     alignItems: 'center',
     justifyContent: 'center',
   },
   sendActionBtnDisabled: {
-    backgroundColor: '#E2E8F0',
+    backgroundColor: '#9CA3AF',
   },
 
   coachBanner: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 16,
-    borderWidth: 1.5,
-    borderColor: 'rgba(226, 232, 240, 0.8)',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.02,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
     shadowRadius: 8,
   },
   coachHeaderRow: {
@@ -1033,11 +1096,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#059669',
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
   },
   coachNoteText: {
     fontSize: 13,
-    color: '#334155',
+    color: '#374151',
     lineHeight: 18.5,
     fontWeight: '500',
   },

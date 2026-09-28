@@ -13,6 +13,7 @@ import {
   ScrollView,
   Animated,
   Modal,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -31,15 +32,20 @@ const GOALS = [
   { id: 'maintain', title: 'Formu Korumak', desc: 'Mevcut kilonu koruyup sağlıklı beslen', icon: 'shield-checkmark' },
 ];
 
+// 🩺 Ayrıştırılmış Bağımsız Hastalık Listesi (Her Biri Ayrı Kutu)
 const COMMON_HEALTH_CONDITIONS = [
-  { id: 'gluten', label: 'Gluten / Çölyak', icon: 'nutrition-outline' },
+  { id: 'colyak', label: 'Çölyak Hastalığı', icon: 'nutrition-outline' },
+  { id: 'gluten', label: 'Gluten Hassasiyeti', icon: 'nutrition-outline' },
   { id: 'laktoz', label: 'Laktoz İntoleransı', icon: 'water-outline' },
   { id: 'insulin', label: 'İnsülin Direnci', icon: 'fitness-outline' },
-  { id: 'diyabet', label: 'Tip 1 / Tip 2 Diyabet', icon: 'medical-outline' },
+  { id: 'diyabet1', label: 'Tip 1 Diyabet', icon: 'medical-outline' },
+  { id: 'diyabet2', label: 'Tip 2 Diyabet', icon: 'medical-outline' },
   { id: 'tansiyon', label: 'Hipertansiyon', icon: 'pulse-outline' },
   { id: 'kolesterol', label: 'Yüksek Kolesterol', icon: 'heart-outline' },
-  { id: 'tiroid', label: 'Haşimato / Hipotiroidi', icon: 'body-outline' },
-  { id: 'reflu', label: 'Reflü / Gastrit', icon: 'flame-outline' },
+  { id: 'hasimato', label: 'Haşimato Tiroidi', icon: 'body-outline' },
+  { id: 'hipotiroidi', label: 'Hipotiroidi', icon: 'body-outline' },
+  { id: 'reflu', label: 'Reflü', icon: 'flame-outline' },
+  { id: 'gastrit', label: 'Gastrit', icon: 'flame-outline' },
 ];
 
 export const AuthScreen = () => {
@@ -61,6 +67,9 @@ export const AuthScreen = () => {
   const [finalToken, setFinalToken] = useState<string>('');
 
   const [selectedGoal, setSelectedGoal] = useState('muscle_gain');
+  
+  // 🚻 Biyolojik Cinsiyet
+  const [gender, setGender] = useState<'male' | 'female'>('male');
   
   const [birthDay, setBirthDay] = useState('');
   const [birthMonth, setBirthMonth] = useState('');
@@ -124,7 +133,7 @@ export const AuthScreen = () => {
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
-  const [processPhase, setProcessPhase] = useState('Metabolizma hızın (BMR) hesaplanıyor...');
+  const [processPhase, setProcessPhase] = useState('Biyolojik cinsiyetine göre bazal metabolizma hızın (BMR) hesaplanıyor...');
 
   useEffect(() => {
     if (step === 'processing') {
@@ -142,7 +151,7 @@ export const AuthScreen = () => {
       }).start();
 
       setTimeout(() => {
-        setProcessPhase('Sağlık durumun ve vücut ölçülerin harmanlanıyor...');
+        setProcessPhase('Vücut ölçülerin ve kas/yağ orantın analiz ediliyor...');
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       }, 1200);
 
@@ -237,6 +246,7 @@ export const AuthScreen = () => {
         email,
         password,
         goal: selectedGoal,
+        gender,
         age: calculatedAge || 24,
         birth_date: formattedBirthDate,
         height_cm: parseFloat(height) || null,
@@ -311,7 +321,11 @@ export const AuthScreen = () => {
             <>
               <View style={styles.header}>
                 <View style={styles.iconCircle}>
-                  <Ionicons name="flash" size={32} color="#059669" />
+                  <Image
+                    source={require('../../assets/Diet-Co-Adaptive-icon.png')}
+                    style={styles.logoImage}
+                    resizeMode="contain"
+                  />
                 </View>
                 <Text style={styles.brandTitle}>Diet-Co</Text>
                 <Text style={styles.brandSubtitle}>
@@ -340,7 +354,7 @@ export const AuthScreen = () => {
                     <Text style={styles.inputLabel}>AD SOYAD</Text>
                     <TextInput
                       style={styles.input}
-                      placeholder="Sebahattin Türk"
+                      placeholder="Adınız Soyadınız"
                       placeholderTextColor="#9CA3AF"
                       value={name}
                       onChangeText={setName}
@@ -492,10 +506,64 @@ export const AuthScreen = () => {
               <Text style={styles.stepBadge}>ADIM 2 / 6</Text>
               <Text style={styles.wizardTitle}>Fiziksel Bilgilerin</Text>
               <Text style={styles.wizardSub}>
-                Doğum tarihin sayesinde yaşın her yıl otomatik güncellenir ve metabolizma hızın (BMR) hatasız hesaplanır.
+                Cinsiyet ve doğum tarihin, bazal metabolizma hızını (BMR) ve kalori hedefini kusursuz hesaplamak için temel faktördür.
               </Text>
 
-              <View style={{ gap: 16, marginTop: 24 }}>
+              <View style={{ gap: 16, marginTop: 20 }}>
+                {/* 🚻 Cinsiyet Seçimi */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>BİYOLOJİK CİNSİYET</Text>
+                  <View style={{ flexDirection: 'row', gap: 12, marginTop: 4 }}>
+                    <TouchableOpacity
+                      style={[styles.genderCard, gender === 'male' && styles.genderCardActive]}
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setGender('male');
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <View style={[styles.genderIconBox, gender === 'male' && styles.genderIconBoxActive]}>
+                        <Ionicons name="man" size={22} color={gender === 'male' ? '#FFFFFF' : '#0284C7'} />
+                      </View>
+                      <View>
+                        <Text style={[styles.genderTitle, gender === 'male' && styles.genderTitleActive]}>Erkek</Text>
+                        <Text style={styles.genderSub}>BMR +5 kcal</Text>
+                      </View>
+                      <View style={{ marginLeft: 'auto' }}>
+                        <Ionicons
+                          name={gender === 'male' ? 'radio-button-on' : 'radio-button-off'}
+                          size={20}
+                          color={gender === 'male' ? '#059669' : '#D1D5DB'}
+                        />
+                      </View>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.genderCard, gender === 'female' && styles.genderCardActive]}
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setGender('female');
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <View style={[styles.genderIconBox, gender === 'female' && styles.genderIconBoxActive]}>
+                        <Ionicons name="woman" size={22} color={gender === 'female' ? '#FFFFFF' : '#EC4899'} />
+                      </View>
+                      <View>
+                        <Text style={[styles.genderTitle, gender === 'female' && styles.genderTitleActive]}>Kadın</Text>
+                        <Text style={styles.genderSub}>BMR -161 kcal</Text>
+                      </View>
+                      <View style={{ marginLeft: 'auto' }}>
+                        <Ionicons
+                          name={gender === 'female' ? 'radio-button-on' : 'radio-button-off'}
+                          size={20}
+                          color={gender === 'female' ? '#059669' : '#D1D5DB'}
+                        />
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
                 <View style={styles.inputGroup}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                     <Text style={styles.inputLabel}>DOĞUM TARİHİN</Text>
@@ -860,25 +928,32 @@ export const AuthScreen = () => {
               <View style={{ marginTop: 18 }}>
                 <Text style={styles.inputLabel}>VARSA RAHATSIZLIKLARINI SEÇİN</Text>
                 
-                <View style={styles.chipsContainer}>
+                {/* 🩺 Ayrı Ayrı Düzenli 2 Sütunlu Kutucuklar */}
+                <View style={styles.diseaseGrid}>
                   {COMMON_HEALTH_CONDITIONS.map((cond) => {
                     const isSelected = selectedConditions.includes(cond.label);
                     return (
                       <TouchableOpacity
                         key={cond.id}
-                        style={[styles.healthChip, isSelected && styles.healthChipSelected]}
+                        style={[styles.diseaseCard, isSelected && styles.diseaseCardSelected]}
                         onPress={() => toggleCondition(cond.label)}
                         activeOpacity={0.7}
                       >
                         <Ionicons
                           name={cond.icon as any}
-                          size={15}
-                          color={isSelected ? '#FFFFFF' : '#059669'}
+                          size={18}
+                          color={isSelected ? '#059669' : '#6B7280'}
                         />
-                        <Text style={[styles.healthChipText, isSelected && styles.healthChipTextSelected]}>
+                        <Text style={[styles.diseaseCardText, isSelected && styles.diseaseCardTextSelected]}>
                           {cond.label}
                         </Text>
-                        {isSelected && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
+                        <View style={{ marginLeft: 'auto' }}>
+                          <Ionicons
+                            name={isSelected ? 'checkbox' : 'square-outline'}
+                            size={18}
+                            color={isSelected ? '#059669' : '#D1D5DB'}
+                          />
+                        </View>
                       </TouchableOpacity>
                     );
                   })}
@@ -981,7 +1056,7 @@ export const AuthScreen = () => {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* 📜 YASAL METİNLER OKUMA PENCERESİ */}
+      {/* 📜 YASAL METİNLER MODALI */}
       <Modal
         visible={legalModal !== null}
         animationType="slide"
@@ -1128,7 +1203,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAF8' },
   scrollContent: { paddingHorizontal: 24, paddingVertical: 20, justifyContent: 'center', flexGrow: 1 },
   header: { alignItems: 'center', marginBottom: 24 },
-  iconCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  iconCircle: { width: 90, height: 90, borderRadius: 36, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', marginBottom: 12, overflow: 'hidden' },
+  logoImage: { width: 80, height: 80 },
   brandTitle: { fontSize: 28, fontWeight: '900', color: '#111827' },
   brandSubtitle: { fontSize: 13, color: '#6B7280', textAlign: 'center', marginTop: 6, lineHeight: 18, paddingHorizontal: 16 },
   tabContainer: { flexDirection: 'row', backgroundColor: '#E5E7EB', borderRadius: 14, padding: 4, marginBottom: 20 },
@@ -1163,6 +1239,47 @@ const styles = StyleSheet.create({
   goalTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
   goalTitleActive: { color: '#059669' },
   goalDesc: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+
+  /* 🚻 Cinsiyet Kart Stilleri */
+  genderCard: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    borderRadius: 16,
+    padding: 12,
+    gap: 10,
+  },
+  genderCardActive: {
+    borderColor: '#059669',
+    backgroundColor: '#F0FDF4',
+  },
+  genderIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  genderIconBoxActive: {
+    backgroundColor: '#059669',
+  },
+  genderTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  genderTitleActive: {
+    color: '#059669',
+  },
+  genderSub: {
+    fontSize: 10.5,
+    color: '#6B7280',
+    fontWeight: '600',
+  },
 
   ageBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#ECFDF5', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, borderWidth: 1, borderColor: '#A7F3D0' },
   ageBadgeText: { fontSize: 11, fontWeight: '800', color: '#059669' },
@@ -1200,34 +1317,39 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     flex: 1,
   },
-  chipsContainer: {
+  
+  /* 🩺 2 Sütunlu Ayrı Ayrı Hastalık Izgarası */
+  diseaseGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 8,
+    gap: 10,
+    marginTop: 10,
   },
-  healthChip: {
+  diseaseCard: {
+    width: '48.4%',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
     backgroundColor: '#FFFFFF',
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
     paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 12,
+    paddingVertical: 12,
+    borderRadius: 14,
   },
-  healthChipSelected: {
-    backgroundColor: '#059669',
+  diseaseCardSelected: {
+    backgroundColor: '#F0FDF4',
     borderColor: '#059669',
   },
-  healthChipText: {
+  diseaseCardText: {
     fontSize: 12,
     fontWeight: '700',
     color: '#334155',
+    flex: 1,
   },
-  healthChipTextSelected: {
-    color: '#FFFFFF',
+  diseaseCardTextSelected: {
+    color: '#059669',
+    fontWeight: '800',
   },
 
   cinematicContainer: { flex: 1, backgroundColor: '#0F172A', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 30 },

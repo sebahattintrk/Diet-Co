@@ -16,13 +16,13 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { Card } from '@/components/Card';
-import { Loader } from '@/components/Loader';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { PaywallModal } from '@/components/PaywallModal';
 
@@ -37,9 +37,72 @@ type Tab = 'plan' | 'shopping';
 const SLOT_ICONS: Record<string, string> = {
   breakfast: '🍳',
   lunch: '🍗',
-  dinner: '🍲',
   snack: '🍎',
+  dinner: '🍲',
 };
+
+// ⏰ Kronolojik Sıralama: Ara Öğün, Akşam Yemeğinden ÖNCE gelir
+const SLOT_ORDER = ['breakfast', 'lunch', 'snack', 'dinner'] as const;
+
+// ⚡ 0 SANİYEDE AÇILIŞ İÇİN ANINDA YÜKLENEN DEFAULT PLAN
+const INSTANT_DEFAULT_MEALS = [
+  {
+    id: 1,
+    slot: 'breakfast',
+    name: 'Yulaflı ve Peynirli Sporcu Kahvaltısı',
+    description: 'Güne enerjik ve dengeli proteinle başlamak için omlet, peynir ve zeytin tabağı.',
+    calories: 550,
+    protein_g: 32,
+    carbs_g: 45,
+    fats_g: 18,
+    serving_size_g: 350,
+    prep_time_min: 15,
+    ingredients: ['3 adet yumurta', '60g lor peyniri', '50g yulaf ezmesi', '5 adet zeytin', 'Domates, salatalık'],
+    rationale: 'Hedeflenen tokluk ve kas onarımı için zengin protein desteği.',
+  },
+  {
+    id: 2,
+    slot: 'lunch',
+    name: 'Izgara Tavuklu Basmati Pilav ve Salata',
+    description: 'Temiz karbonhidrat ve sindirimi kolay yağsız tavuk göğsü tabağı.',
+    calories: 680,
+    protein_g: 48,
+    carbs_g: 70,
+    fats_g: 14,
+    serving_size_g: 450,
+    prep_time_min: 25,
+    ingredients: ['180g tavuk göğsü', '1 su bardağı basmati pirinç', '1 tatlı kaşığı zeytinyağı', 'Akdeniz yeşillikleri'],
+    rationale: 'Glikojen depolarını tazelemek ve kas gelişimini desteklemek için.',
+  },
+  {
+    id: 3,
+    slot: 'snack',
+    name: 'Muzlu ve Fıstık Ezmeli Yoğurt Kasesi',
+    description: 'Tatlı ihtiyacını temiz makrolarla karşılayan pratik ara öğün.',
+    calories: 280,
+    protein_g: 16,
+    carbs_g: 35,
+    fats_g: 8,
+    serving_size_g: 220,
+    prep_time_min: 5,
+    ingredients: ['150g süzme yoğurt', '1 adet yerli muz', '1 tatlı kaşığı şekersiz fıstık ezmesi', 'Tarçın'],
+    rationale: 'Kan şekerini dengede tutarak metabolizmayı canlı tutar.',
+  },
+  {
+    id: 4,
+    slot: 'dinner',
+    name: 'Fırında Sebzeli Somon / Köfte ve Patates',
+    description: 'Hafif ama besleyici, akşam saatlerinde sindirimi yormayan tabak.',
+    calories: 620,
+    protein_g: 42,
+    carbs_g: 50,
+    fats_g: 20,
+    serving_size_g: 400,
+    prep_time_min: 30,
+    ingredients: ['160g somon veya yağsız köfte', '1 adet orta boy patates', 'Kuşkonmaz / Kabak', '1 kase yoğurt'],
+    rationale: 'Gece boyunca kas sentezini sürdürecek sağlıklı yağ ve mineral desteği.',
+  },
+];
 
 interface NormalizedItem {
   key: string;
@@ -58,85 +121,35 @@ function normalizeIngredient(rawItem: any, mealSlotName: string): NormalizedItem
   const numMatch = lower.match(/(\d+(?:\.\d+)?)/);
   const detectedNum = numMatch ? parseFloat(numMatch[1]) : 0;
 
-  if (lower.includes('domates')) {
-    return { key: 'domates', displayName: 'Domates', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🍅', mealName: mealSlotName };
-  }
-  if (lower.includes('salatalık')) {
-    return { key: 'salatalik', displayName: 'Salatalık', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🥒', mealName: mealSlotName };
-  }
-  if (lower.includes('biber')) {
-    return { key: 'biber', displayName: 'Yeşil Biber', amount: detectedNum || 2, unit: 'Adet', category: 'manav', icon: '🫑', mealName: mealSlotName };
-  }
-  if (lower.includes('patates')) {
-    return { key: 'patates', displayName: 'Patates', amount: detectedNum || 1, unit: 'Orta Boy', category: 'manav', icon: '🥔', mealName: mealSlotName };
-  }
-  if (lower.includes('limon')) {
-    return { key: 'limon', displayName: 'Limon', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🍋', mealName: mealSlotName };
-  }
-  if (lower.includes('muz')) {
-    return { key: 'muz', displayName: 'Muz', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🍌', mealName: mealSlotName };
-  }
-  if (lower.includes('elma')) {
-    return { key: 'elma', displayName: 'Elma', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🍎', mealName: mealSlotName };
-  }
-  if (lower.includes('roka') || lower.includes('yeşillik') || lower.includes('marul') || lower.includes('maydanoz')) {
-    return { key: 'yesillik', displayName: 'Mevsim Yeşillikleri', amount: detectedNum || 1, unit: 'Demet', category: 'manav', icon: '🥬', mealName: mealSlotName };
-  }
+  if (lower.includes('domates')) return { key: 'domates', displayName: 'Domates', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🍅', mealName: mealSlotName };
+  if (lower.includes('salatalık')) return { key: 'salatalik', displayName: 'Salatalık', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🥒', mealName: mealSlotName };
+  if (lower.includes('biber')) return { key: 'biber', displayName: 'Yeşil Biber', amount: detectedNum || 2, unit: 'Adet', category: 'manav', icon: '🫑', mealName: mealSlotName };
+  if (lower.includes('patates')) return { key: 'patates', displayName: 'Patates', amount: detectedNum || 1, unit: 'Orta Boy', category: 'manav', icon: '🥔', mealName: mealSlotName };
+  if (lower.includes('limon')) return { key: 'limon', displayName: 'Limon', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🍋', mealName: mealSlotName };
+  if (lower.includes('muz')) return { key: 'muz', displayName: 'Muz', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🍌', mealName: mealSlotName };
+  if (lower.includes('elma')) return { key: 'elma', displayName: 'Elma', amount: detectedNum || 1, unit: 'Adet', category: 'manav', icon: '🍎', mealName: mealSlotName };
+  if (lower.includes('roka') || lower.includes('yeşillik') || lower.includes('marul') || lower.includes('maydanoz')) return { key: 'yesillik', displayName: 'Mevsim Yeşillikleri', amount: detectedNum || 1, unit: 'Demet', category: 'manav', icon: '🥬', mealName: mealSlotName };
 
-  if (lower.includes('tavuk')) {
-    return { key: 'tavuk', displayName: 'Tavuk Göğsü', amount: detectedNum || 200, unit: 'g', category: 'kasap', icon: '🍗', mealName: mealSlotName };
-  }
-  if (lower.includes('somon') || lower.includes('balık') || lower.includes('ton balığı')) {
-    return { key: 'somon', displayName: 'Somon / Balık Fileto', amount: detectedNum || 200, unit: 'g', category: 'kasap', icon: '🐟', mealName: mealSlotName };
-  }
-  if (lower.includes('kıyma') || lower.includes('dana') || lower.includes('köfte') || lower.includes('et')) {
-    return { key: 'dana_eti', displayName: 'Yağsız Dana Kıyma / Et', amount: detectedNum || 180, unit: 'g', category: 'kasap', icon: '🥩', mealName: mealSlotName };
-  }
+  if (lower.includes('tavuk')) return { key: 'tavuk', displayName: 'Tavuk Göğsü', amount: detectedNum || 200, unit: 'g', category: 'kasap', icon: '🍗', mealName: mealSlotName };
+  if (lower.includes('somon') || lower.includes('balık') || lower.includes('ton balığı')) return { key: 'somon', displayName: 'Somon / Balık Fileto', amount: detectedNum || 200, unit: 'g', category: 'kasap', icon: '🐟', mealName: mealSlotName };
+  if (lower.includes('kıyma') || lower.includes('dana') || lower.includes('köfte') || lower.includes('et')) return { key: 'dana_eti', displayName: 'Yağsız Dana Kıyma / Et', amount: detectedNum || 180, unit: 'g', category: 'kasap', icon: '🥩', mealName: mealSlotName };
 
-  if (lower.includes('yumurta')) {
-    return { key: 'yumurta', displayName: 'Yumurta', amount: detectedNum || 2, unit: 'Adet', category: 'sut', icon: '🥚', mealName: mealSlotName };
-  }
-  if (lower.includes('lor')) {
-    return { key: 'lor', displayName: 'Lor Peyniri', amount: detectedNum || 100, unit: 'g', category: 'sut', icon: '🧀', mealName: mealSlotName };
-  }
-  if (lower.includes('beyaz peynir') || lower.includes('kaşar') || lower.includes('peynir')) {
-    return { key: 'peynir', displayName: 'Peynir Çeşitleri', amount: detectedNum || 60, unit: 'g', category: 'sut', icon: '🧀', mealName: mealSlotName };
-  }
-  if (lower.includes('süt')) {
-    return { key: 'sut', displayName: 'Süt / Bitkisel Süt', amount: detectedNum || 200, unit: 'ml', category: 'sut', icon: '🥛', mealName: mealSlotName };
-  }
-  if (lower.includes('yoğurt')) {
-    return { key: 'yogurt', displayName: 'Süzme / Doğal Yoğurt', amount: detectedNum || 150, unit: 'g', category: 'sut', icon: '🥣', mealName: mealSlotName };
-  }
+  if (lower.includes('yumurta')) return { key: 'yumurta', displayName: 'Yumurta', amount: detectedNum || 2, unit: 'Adet', category: 'sut', icon: '🥚', mealName: mealSlotName };
+  if (lower.includes('lor')) return { key: 'lor', displayName: 'Lor Peyniri', amount: detectedNum || 100, unit: 'g', category: 'sut', icon: '🧀', mealName: mealSlotName };
+  if (lower.includes('beyaz peynir') || lower.includes('kaşar') || lower.includes('peynir')) return { key: 'peynir', displayName: 'Peynir Çeşitleri', amount: detectedNum || 60, unit: 'g', category: 'sut', icon: '🧀', mealName: mealSlotName };
+  if (lower.includes('süt')) return { key: 'sut', displayName: 'Süt / Bitkisel Süt', amount: detectedNum || 200, unit: 'ml', category: 'sut', icon: '🥛', mealName: mealSlotName };
+  if (lower.includes('yoğurt')) return { key: 'yogurt', displayName: 'Süzme / Doğal Yoğurt', amount: detectedNum || 150, unit: 'g', category: 'sut', icon: '🥣', mealName: mealSlotName };
 
-  if (lower.includes('ekmek') || lower.includes('tam buğday')) {
-    return { key: 'ekmek', displayName: 'Tam Buğday Ekmeği', amount: detectedNum || 2, unit: 'Dilim', category: 'kuru', icon: '🍞', mealName: mealSlotName };
-  }
-  if (lower.includes('yulaf')) {
-    return { key: 'yulaf', displayName: 'Yulaf Ezmesi', amount: detectedNum || 60, unit: 'g', category: 'kuru', icon: '🥣', mealName: mealSlotName };
-  }
-  if (lower.includes('pirinç') || lower.includes('pilav')) {
-    return { key: 'pirinc', displayName: 'Basmati Pirinç', amount: detectedNum || 70, unit: 'g', category: 'kuru', icon: '🍚', mealName: mealSlotName };
-  }
-  if (lower.includes('bulgur')) {
-    return { key: 'bulgur', displayName: 'Pilavlık Bulgur', amount: detectedNum || 70, unit: 'g', category: 'kuru', icon: '🌾', mealName: mealSlotName };
-  }
-  if (lower.includes('makarna')) {
-    return { key: 'makarna', displayName: 'Kepekli / Normal Makarna', amount: detectedNum || 80, unit: 'g', category: 'kuru', icon: '🍝', mealName: mealSlotName };
-  }
+  if (lower.includes('ekmek') || lower.includes('tam buğday')) return { key: 'ekmek', displayName: 'Tam Buğday Ekmeği', amount: detectedNum || 2, unit: 'Dilim', category: 'kuru', icon: '🍞', mealName: mealSlotName };
+  if (lower.includes('yulaf')) return { key: 'yulaf', displayName: 'Yulaf Ezmesi', amount: detectedNum || 60, unit: 'g', category: 'kuru', icon: '🥣', mealName: mealSlotName };
+  if (lower.includes('pirinç') || lower.includes('pilav')) return { key: 'pirinc', displayName: 'Basmati Pirinç', amount: detectedNum || 70, unit: 'g', category: 'kuru', icon: '🍚', mealName: mealSlotName };
+  if (lower.includes('bulgur')) return { key: 'bulgur', displayName: 'Pilavlık Bulgur', amount: detectedNum || 70, unit: 'g', category: 'kuru', icon: '🌾', mealName: mealSlotName };
+  if (lower.includes('makarna')) return { key: 'makarna', displayName: 'Kepekli / Normal Makarna', amount: detectedNum || 80, unit: 'g', category: 'kuru', icon: '🍝', mealName: mealSlotName };
 
-  if (lower.includes('zeytinyağı')) {
-    return { key: 'zeytinyagi', displayName: 'Zeytinyağı', amount: detectedNum || 1, unit: 'Yemek Kaşığı', category: 'temel', icon: '🫒', mealName: mealSlotName };
-  }
-  if (lower.includes('tereyağı')) {
-    return { key: 'tereyagi', displayName: 'Tereyağı', amount: detectedNum || 1, unit: 'Tatlı Kaşığı', category: 'temel', icon: '🧈', mealName: mealSlotName };
-  }
-  if (lower.includes('fıstık ezmesi')) {
-    return { key: 'fistik_ezmesi', displayName: 'Şekersiz Fıstık Ezmesi', amount: detectedNum || 1, unit: 'Yemek Kaşığı', category: 'temel', icon: '🥜', mealName: mealSlotName };
-  }
-  if (lower.includes('ceviz') || lower.includes('badem') || lower.includes('fındık')) {
-    return { key: 'kuruyemis', displayName: 'Çiğ Kuruyemiş', amount: detectedNum || 25, unit: 'g', category: 'temel', icon: '🌰', mealName: mealSlotName };
-  }
+  if (lower.includes('zeytinyağı')) return { key: 'zeytinyagi', displayName: 'Zeytinyağı', amount: detectedNum || 1, unit: 'Yemek Kaşığı', category: 'temel', icon: '🫒', mealName: mealSlotName };
+  if (lower.includes('tereyağı')) return { key: 'tereyagi', displayName: 'Tereyağı', amount: detectedNum || 1, unit: 'Tatlı Kaşığı', category: 'temel', icon: '🧈', mealName: mealSlotName };
+  if (lower.includes('fıstık ezmesi')) return { key: 'fistik_ezmesi', displayName: 'Şekersiz Fıstık Ezmesi', amount: detectedNum || 1, unit: 'Yemek Kaşığı', category: 'temel', icon: '🥜', mealName: mealSlotName };
+  if (lower.includes('ceviz') || lower.includes('badem') || lower.includes('fındık')) return { key: 'kuruyemis', displayName: 'Çiğ Kuruyemiş', amount: detectedNum || 25, unit: 'g', category: 'temel', icon: '🌰', mealName: mealSlotName };
 
   const cleanFallback = text.replace(/^[\-\•\*\s]+/, '').trim();
   return {
@@ -164,9 +177,9 @@ export function PlanScreen() {
   const userId = Number(user?.id) || 1;
   const setPremium = useUserStore((s) => s.setPremium);
   const q = useMealPlan(userId);
-  const regenerate = useRegeneratePlan(userId);
 
   const [dashboardData, setDashboardData] = useState<any>(null);
+  const [cachedMeals, setCachedMeals] = useState<any[]>([]);
   const [tab, setTab] = useState<Tab>('plan');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [paywallVisible, setPaywallVisible] = useState(false);
@@ -180,21 +193,39 @@ export function PlanScreen() {
 
   const todayKey = new Date().toISOString().split('T')[0];
   const SHOPPING_STORAGE_KEY = `@fitintel_shopping_v2_${todayKey}_${userId}`;
+  const PLAN_CACHE_KEY = `@fitintel_mealplan_cache_${userId}`;
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
 
-  const fetchDashboard = useCallback(async () => {
-  if (!userId) return;
-  try {
-    const res = await api.get(`/api/dashboard?userId=${userId}`);
-    setDashboardData(res.data);
-  } catch (err) {
-    console.error('PlanScreen dashboard hatası:', err);
-  }
-}, [userId]);
-
+  // 1. Önbellekten son planı anında oku (<0.1 saniye)
   useEffect(() => {
-    fetchDashboard();
-  }, [fetchDashboard]);
+    (async () => {
+      try {
+        const local = await AsyncStorage.getItem(PLAN_CACHE_KEY);
+        if (local) {
+          setCachedMeals(JSON.parse(local));
+        }
+      } catch (_) {}
+    })();
+  }, [PLAN_CACHE_KEY]);
+
+  const fetchDashboard = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await api.get(`/api/dashboard?userId=${userId}`);
+      setDashboardData(res.data);
+    } catch (err) {
+      console.error('PlanScreen dashboard hatası:', err);
+    }
+  }, [userId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (userId) {
+        fetchDashboard();
+        q.refetch();
+      }
+    }, [userId, fetchDashboard, q.refetch])
+  );
 
   useEffect(() => {
     (async () => {
@@ -207,42 +238,59 @@ export function PlanScreen() {
     })();
   }, [SHOPPING_STORAGE_KEY]);
 
+  // ⚡ ANINDA GÖSTERİLEN KRONOLOJİK ÖĞÜN LİSTESİ
   const meals = useMemo(() => {
-    if (!q.data) return [];
-    if (Array.isArray(q.data.meals) && q.data.meals.length > 0) {
-      return q.data.meals;
+    let rawList: any[] = [];
+
+    if (q.data?.meals && Array.isArray(q.data.meals) && q.data.meals.length > 0) {
+      rawList = q.data.meals;
+      // Gelecek açılışlar için cache'e yaz
+      AsyncStorage.setItem(PLAN_CACHE_KEY, JSON.stringify(rawList)).catch(() => {});
+    } else if (q.data) {
+      SLOT_ORDER.forEach((slot) => {
+        const snap = q.data[`${slot}_snapshot`];
+        if (snap && typeof snap === 'object') {
+          rawList.push({
+            id: snap.id || `${q.data.id || 'plan'}-${slot}`,
+            slot: snap.slot || slot,
+            name: snap.name || 'Öğün',
+            description: snap.description || '',
+            calories: Number(snap.calories) || 0,
+            protein_g: Number(snap.protein_g) || 0,
+            carbs_g: Number(snap.carbs_g) || 0,
+            fats_g: Number(snap.fats_g) || 0,
+            serving_size_g: snap.serving_size_g,
+            prep_time_min: snap.prep_time_min,
+            ingredients: Array.isArray(snap.ingredients)
+              ? snap.ingredients
+              : typeof snap.ingredients === 'string'
+              ? snap.ingredients.split(',').map((s: string) => s.trim())
+              : [],
+            rationale: snap.rationale || '',
+            done: Boolean(q.data[`${slot}_done`]),
+          });
+        }
+      });
+      if (rawList.length > 0) {
+        AsyncStorage.setItem(PLAN_CACHE_KEY, JSON.stringify(rawList)).catch(() => {});
+      }
     }
 
-    const slots = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
-    const list: any[] = [];
-
-    slots.forEach((slot) => {
-      const snap = q.data[`${slot}_snapshot`];
-      if (snap && typeof snap === 'object') {
-        list.push({
-          id: snap.id || `${q.data.id || 'plan'}-${slot}`,
-          slot: snap.slot || slot,
-          name: snap.name || 'Öğün',
-          description: snap.description || '',
-          calories: Number(snap.calories) || 0,
-          protein_g: Number(snap.protein_g) || 0,
-          carbs_g: Number(snap.carbs_g) || 0,
-          fats_g: Number(snap.fats_g) || 0,
-          serving_size_g: snap.serving_size_g,
-          prep_time_min: snap.prep_time_min,
-          ingredients: Array.isArray(snap.ingredients)
-            ? snap.ingredients
-            : typeof snap.ingredients === 'string'
-            ? snap.ingredients.split(',').map((s: string) => s.trim())
-            : [],
-          rationale: snap.rationale || '',
-          done: Boolean(q.data[`${slot}_done`]),
-        });
+    // Eğer sunucu henüz yanıt vermediyse önbellekteki planı, o da yoksa anlık default planı göster!
+    if (rawList.length === 0) {
+      if (cachedMeals.length > 0) {
+        rawList = cachedMeals;
+      } else {
+        rawList = INSTANT_DEFAULT_MEALS;
       }
-    });
+    }
 
-    return list;
-  }, [q.data]);
+    return [...rawList].sort((a, b) => {
+      const idxA = SLOT_ORDER.indexOf(a.slot as any);
+      const idxB = SLOT_ORDER.indexOf(b.slot as any);
+      return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+    });
+  }, [q.data, cachedMeals, PLAN_CACHE_KEY]);
 
   const plannedTotals = useMemo(() => {
     return {
@@ -254,9 +302,7 @@ export function PlanScreen() {
   }, [meals]);
 
   const toggleShoppingItem = async (key: string) => {
-    try {
-      Haptics.selectionAsync();
-    } catch (_) {}
+    try { Haptics.selectionAsync(); } catch (_) {}
     const updated = { ...checkedItems, [key]: !checkedItems[key] };
     setCheckedItems(updated);
     try {
@@ -322,9 +368,7 @@ export function PlanScreen() {
   const progressPercent = totalCount > 0 ? Math.round((checkedCount / totalCount) * 100) : 0;
 
   const handleShareShoppingList = async () => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch (_) {}
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch (_) {}
     let text = `🛒 Diet-Co Günlük Akıllı Alışveriş Listem (${new Date().toLocaleDateString('tr-TR')}):\n\n`;
 
     consolidatedShoppingList.forEach((item) => {
@@ -332,9 +376,7 @@ export function PlanScreen() {
       text += `${check} ${item.icon} ${item.displayName} - ${item.totalAmount} ${item.unit} (${item.mealsArray.join(', ')})\n`;
     });
 
-    try {
-      await Share.share({ message: text });
-    } catch (_) {}
+    try { await Share.share({ message: text }); } catch (_) {}
   };
 
   const handleResetShoppingList = () => {
@@ -368,9 +410,7 @@ export function PlanScreen() {
     if (!meal || instantLogging) return;
 
     setInstantLogging(true);
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch (_) {}
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch (_) {}
 
     try {
       const res = await api.post('/api/chat', {
@@ -379,9 +419,7 @@ export function PlanScreen() {
       });
 
       setInstantMeal('');
-      try {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } catch (_) {}
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch (_) {}
       Alert.alert(
         '✅ Günlüğe Eklendi',
         res.data?.loggedItem
@@ -392,9 +430,7 @@ export function PlanScreen() {
       await q.refetch();
     } catch (err: any) {
       if (err?.response?.data?.code === 'LIMIT_REACHED' || err?.response?.data?.code === 'TRIAL_EXPIRED') {
-        try {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        } catch (_) {}
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch (_) {}
         setPaywallVisible(true);
         return;
       }
@@ -412,9 +448,7 @@ export function PlanScreen() {
     }
 
     setUpdatingSlot(slot);
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch (_) {}
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch (_) {}
 
     try {
       await api.post(`/api/meal-plan/${userId}/custom-slot`, {
@@ -423,17 +457,13 @@ export function PlanScreen() {
       });
 
       setCustomInputs((prev) => ({ ...prev, [slot]: '' }));
-      try {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } catch (_) {}
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch (_) {}
       await q.refetch();
       await fetchDashboard();
       Alert.alert('✨ Harika!', 'Koçun elindeki malzemelerle bu öğünü hedeflerine uygun şekilde yeniden tasarladı.');
     } catch (err: any) {
       if (err?.response?.data?.code === 'LIMIT_REACHED' || err?.response?.data?.code === 'TRIAL_EXPIRED') {
-        try {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        } catch (_) {}
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch (_) {}
         setPaywallVisible(true);
         return;
       }
@@ -463,11 +493,7 @@ export function PlanScreen() {
 
   const plannedCal = Math.round(Number(plannedTotals.calories));
 
-  if (q.isLoading) {
-    return <Loader label="Günün AI beslenme planı yükleniyor…" />;
-  }
-
-  // 🛑 DENEME SÜRESİ DOLAN KULLANICI İÇİN ÖĞÜNLERİ VE YENİLEMEYİ TAMAMEN KİLİTLE
+  // 🛑 KİLİT KONTROLÜ
   const isTrialExpired = (!isUserPro && trialDaysLeft === 0) || (q.error as any)?.response?.data?.code === 'TRIAL_EXPIRED';
 
   if (isTrialExpired) {
@@ -501,17 +527,6 @@ export function PlanScreen() {
     );
   }
 
-  if (q.isError || !q.data) {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-        <View style={styles.centerBox}>
-          <Text style={styles.errorTitle}>Plan alınamadı</Text>
-          <Text style={styles.errorSub}>API'ye ulaşılamıyor — yenilemek için sayfayı aşağı çek.</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: colors.bg }}>
       <KeyboardAvoidingView
@@ -528,13 +543,21 @@ export function PlanScreen() {
             <RefreshControl
               refreshing={q.isFetching && !q.isLoading}
               onRefresh={handleRefresh}
-              tintColor={colors.textLow}
+              tintColor="#059669"
             />
           }
         >
-          <ScreenHeader subtitle="Bugüne özel" title="AI Beslenme Planım" />
+          {/* Başlık Alanı */}
+          <View style={{ paddingHorizontal: 20, paddingTop: 6, marginBottom: 12 }}>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: '#059669', textTransform: 'uppercase', letterSpacing: 0.8 }}>
+              Bugüne özel
+            </Text>
+            <Text style={{ fontSize: 24, fontWeight: '900', color: '#111827', marginTop: 2 }}>
+              AI Beslenme Planım
+            </Text>
+          </View>
 
-          {/* ⚡ PRO OLMAYANLAR İÇİN EN ÜST DENEME BİLGİLENDİRME BANDI */}
+          {/* PRO Bilgilendirme Bandı */}
           {!isUserPro && (
             <View style={{ paddingHorizontal: 20, marginBottom: 12 }}>
               <View style={[styles.trialBanner, trialDaysLeft === 0 && styles.trialBannerExpired]}>
@@ -584,24 +607,27 @@ export function PlanScreen() {
 
           {tab === 'plan' && (
             <>
-              <View style={{ paddingHorizontal: 20, marginTop: 16 }}>
-                <Card>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              {/* 🎯 Dengeli Günlük Kalori Kartı */}
+              <View style={{ paddingHorizontal: 20, marginTop: 14 }}>
+                <View style={styles.calorieWidgetCard}>
+                  <View style={styles.cardHeaderRow}>
+                    <View style={styles.liveHeaderLeft}>
                       <View style={[styles.liveDot, isExceeded && { backgroundColor: '#EF4444' }]} />
                       <Text style={[styles.sectionCaption, isExceeded && { color: '#EF4444' }]}>
                         {isExceeded ? 'KALORİ HEDEFİ AŞILDI' : 'GÜNLÜK KALORİ DENGESİ'}
                       </Text>
                     </View>
-                    <Text style={[{ color: colors.textLow, fontSize: 13, fontWeight: '800' }, isExceeded && { color: '#EF4444' }]}>
+                    <Text style={[styles.percentageText, isExceeded && { color: '#EF4444' }]}>
                       %{calPercent}
                     </Text>
                   </View>
 
-                  <Text style={[styles.targetCaloriesText, isExceeded && { color: '#EF4444' }]}>
-                    {targetCal.toLocaleString('tr-TR')}{' '}
-                    <Text style={{ fontSize: 16, fontWeight: '600', color: colors.textLow }}>kcal hedef</Text>
-                  </Text>
+                  <View style={styles.calorieCenterBox}>
+                    <Text style={[styles.targetCaloriesText, isExceeded && { color: '#EF4444' }]}>
+                      {targetCal.toLocaleString('tr-TR')}
+                    </Text>
+                    <Text style={styles.targetCaloriesLabel}>kcal günlük hedef</Text>
+                  </View>
 
                   <View style={styles.progressBg}>
                     <View
@@ -609,7 +635,7 @@ export function PlanScreen() {
                         styles.progressFill,
                         {
                           width: `${Math.max(4, calPercent)}%`,
-                          backgroundColor: isExceeded ? '#EF4444' : colors.primary,
+                          backgroundColor: isExceeded ? '#EF4444' : '#059669',
                         },
                       ]}
                     />
@@ -623,19 +649,19 @@ export function PlanScreen() {
                       </Text>
                     </View>
                   ) : (
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                      <Text style={{ color: colors.textLow, fontSize: 12, fontWeight: '600' }}>
-                        {consumedCal} / {targetCal.toLocaleString('tr-TR')} kcal alındı ({remainingCal} kcal kaldı)
+                    <View style={styles.statSummaryRow}>
+                      <Text style={styles.statSummaryText}>
+                        <Text style={{ fontWeight: '800', color: '#111827' }}>{consumedCal}</Text> / {targetCal.toLocaleString('tr-TR')} kcal alındı ({remainingCal} kcal kaldı)
                       </Text>
                       {plannedCal > 0 && (
-                        <Text style={{ color: '#059669', fontSize: 11, fontWeight: '800' }}>
+                        <Text style={styles.menuTotalText}>
                           Menü: {plannedCal} kcal
                         </Text>
                       )}
                     </View>
                   )}
 
-                  <View style={{ flexDirection: 'row', marginTop: 14, gap: 10 }}>
+                  <View style={styles.macroPillsRowTop}>
                     <MacroPill
                       label="Protein"
                       value={`${Math.round(proteinConsumed)} / ${proteinTarget}g`}
@@ -651,13 +677,14 @@ export function PlanScreen() {
                       danger={fatConsumed > fatTarget}
                     />
                   </View>
-                </Card>
+                </View>
               </View>
 
-              <View style={{ paddingHorizontal: 20, marginTop: 16 }}>
+              {/* ⚡ Hızlı Öğün Kartı */}
+              <View style={{ paddingHorizontal: 20, marginTop: 14 }}>
                 <View style={styles.instantMealCard}>
                   <View style={styles.instantMealHeader}>
-                    <Ionicons name="flash" size={17} color="#059669" />
+                    <Ionicons name="flash" size={16} color="#059669" />
                     <Text style={styles.instantMealTitle}>ANLIK NE YEDİN?</Text>
                   </View>
                   <Text style={styles.instantMealSub}>
@@ -692,13 +719,15 @@ export function PlanScreen() {
                 </View>
               </View>
 
+              {/* Başlık */}
               <View style={{ paddingHorizontal: 20, marginTop: 22, marginBottom: 8 }}>
-                <Text style={{ color: colors.textHi, fontSize: 17, fontWeight: '800' }}>
+                <Text style={{ color: '#111827', fontSize: 18, fontWeight: '800' }}>
                   Bugünkü Öğün Planın
                 </Text>
               </View>
 
-              <View style={{ paddingHorizontal: 20, gap: 18 }}>
+              {/* 🍽️ Kronolojik Sıralı Öğün Kartları */}
+              <View style={{ paddingHorizontal: 20, gap: 16 }}>
                 {meals.map((m) => {
                   const key = `${m.slot}-${m.id}`;
                   const ingredients = Array.isArray(m.ingredients) ? m.ingredients : [];
@@ -822,7 +851,7 @@ export function PlanScreen() {
           )}
 
           {tab === 'shopping' && (
-            <View style={{ paddingHorizontal: 20, marginTop: 16 }}>
+            <View style={{ paddingHorizontal: 20, marginTop: 14 }}>
               <View style={styles.shoppingHeroCard}>
                 <View style={styles.shoppingHeroTop}>
                   <View>
@@ -858,7 +887,7 @@ export function PlanScreen() {
                     <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textMid }}>
                       Sepete Eklenen Ürünler
                     </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '800', color: colors.primary }}>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#059669' }}>
                       {checkedCount} / {totalCount} (%{progressPercent})
                     </Text>
                   </View>
@@ -884,9 +913,7 @@ export function PlanScreen() {
                     <Pressable
                       key={key}
                       onPress={() => {
-                        try {
-                          Haptics.selectionAsync();
-                        } catch (_) {}
+                        try { Haptics.selectionAsync(); } catch (_) {}
                         setSelectedCategory(key);
                       }}
                       style={[
@@ -1037,8 +1064,8 @@ function MacroPill({
 
 const styles = StyleSheet.create({
   centerBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
-  errorTitle: { color: colors.textHi, fontSize: 18, fontWeight: '800', textAlign: 'center' },
-  errorSub: { color: colors.textMid, fontSize: 13, marginTop: 8, textAlign: 'center', lineHeight: 19 },
+  errorTitle: { color: '#111827', fontSize: 18, fontWeight: '800', textAlign: 'center' },
+  errorSub: { color: '#6B7280', fontSize: 13, marginTop: 8, textAlign: 'center', lineHeight: 19 },
   expiredLockIcon: {
     width: 80,
     height: 80,
@@ -1067,10 +1094,85 @@ const styles = StyleSheet.create({
   },
   proUpgradeFullBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
   liveDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#10B981' },
-  sectionCaption: { color: colors.textLow, fontSize: 11, fontWeight: '800', letterSpacing: 0.8 },
-  targetCaloriesText: { color: colors.textHi, fontSize: 32, fontWeight: '900', marginTop: 4 },
-  progressBg: { height: 8, marginTop: 12, borderRadius: 8, backgroundColor: colors.border, overflow: 'hidden' },
-  progressFill: { height: '100%', borderRadius: 8 },
+  
+  calorieWidgetCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  liveHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sectionCaption: {
+    color: '#6B7280',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  percentageText: {
+    color: '#6B7280',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  calorieCenterBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 4,
+  },
+  targetCaloriesText: {
+    color: '#111827',
+    fontSize: 34,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+  targetCaloriesLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginTop: 1,
+  },
+  progressBg: {
+    height: 7,
+    marginTop: 10,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 8,
+  },
+  statSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  statSummaryText: {
+    color: '#6B7280',
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  menuTotalText: {
+    color: '#059669',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   exceededBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1088,16 +1190,33 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#DC2626',
   },
+  macroPillsRowTop: {
+    flexDirection: 'row',
+    marginTop: 14,
+    gap: 8,
+  },
   macroPill: {
     flex: 1,
-    backgroundColor: colors.surface2,
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 6,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
   },
-  macroPillLabel: { color: colors.textLow, fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
-  macroPillValue: { color: colors.textHi, fontSize: 12, fontWeight: '800', marginTop: 2 },
+  macroPillLabel: {
+    color: '#6B7280',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
+  macroPillValue: {
+    color: '#111827',
+    fontSize: 11.5,
+    fontWeight: '800',
+    marginTop: 2,
+  },
 
   trialBanner: {
     backgroundColor: '#FFFFFF',
@@ -1164,7 +1283,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#D1FAE5',
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.03,
@@ -1201,26 +1320,26 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: 18,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
     elevation: 2,
   },
   mealCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  slotTitle: { fontSize: 12, fontWeight: '800', color: colors.textLow, letterSpacing: 0.8 },
-  timeBadge: { backgroundColor: colors.surface2, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  timeBadgeText: { fontSize: 10, fontWeight: '700', color: colors.textMid },
-  mealName: { fontSize: 17, fontWeight: '800', color: colors.textHi, lineHeight: 23 },
-  mealDescription: { fontSize: 13, color: colors.textMid, lineHeight: 18, marginTop: 5 },
+  slotTitle: { fontSize: 12, fontWeight: '800', color: '#6B7280', letterSpacing: 0.8 },
+  timeBadge: { backgroundColor: '#F3F4F6', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  timeBadgeText: { fontSize: 10, fontWeight: '700', color: '#4B5563' },
+  mealName: { fontSize: 17, fontWeight: '800', color: '#111827', lineHeight: 23 },
+  mealDescription: { fontSize: 13, color: '#4B5563', lineHeight: 18, marginTop: 5 },
   macroPillsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 12 },
-  badge: { backgroundColor: colors.surface2, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 10 },
-  badgeText: { fontSize: 11, fontWeight: '700', color: colors.textMid },
+  badge: { backgroundColor: '#F3F4F6', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 10 },
+  badgeText: { fontSize: 11, fontWeight: '700', color: '#4B5563' },
   badgeCal: { backgroundColor: '#ECFDF5' },
   badgeCalText: { fontSize: 11, fontWeight: '800', color: '#059669' },
-  ingredientsContainer: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.surface2 },
-  ingredientsHeader: { fontSize: 10, fontWeight: '700', color: colors.textLow, letterSpacing: 0.8, marginBottom: 6 },
+  ingredientsContainer: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F3F4F6' },
+  ingredientsHeader: { fontSize: 10, fontWeight: '700', color: '#6B7280', letterSpacing: 0.8, marginBottom: 6 },
   ingredientsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   ingredientChip: { backgroundColor: '#F3F4F6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   ingredientChipText: { fontSize: 11, color: '#374151', fontWeight: '500' },
@@ -1276,8 +1395,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 24,
     padding: 18,
-    borderWidth: 1.5,
-    borderColor: 'rgba(226, 232, 240, 0.8)',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.03,
@@ -1299,7 +1418,7 @@ const styles = StyleSheet.create({
   shoppingHeroTitle: {
     fontSize: 21,
     fontWeight: '800',
-    color: '#0F172A',
+    color: '#111827',
     marginTop: 2,
   },
   shoppingActionCircle: {
@@ -1361,8 +1480,8 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     paddingVertical: 12,
     paddingHorizontal: 14,
-    borderWidth: 1.5,
-    borderColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.02,
@@ -1399,7 +1518,7 @@ const styles = StyleSheet.create({
   consolidatedItemTitle: {
     fontSize: 14.5,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#111827',
   },
   consolidatedItemTitleChecked: {
     textDecorationLine: 'line-through',

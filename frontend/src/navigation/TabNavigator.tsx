@@ -30,7 +30,7 @@ const DOCK_PADDING = 3;
 
 const TAB_CONFIG: Record<string, { label: string; icon: any; iconOutline: any }> = {
   Home: { label: 'Ana Sayfa', icon: 'home', iconOutline: 'home-outline' },
-  Plan: { label: 'Öğün & Plan', icon: 'calendar', iconOutline: 'calendar-outline' },
+  Plan: { label: 'Plan', icon: 'calendar', iconOutline: 'calendar-outline' },
   Chat: { label: 'AI Koç', icon: 'chatbubbles', iconOutline: 'chatbubbles-outline' },
   Supplement: { label: 'Takviye', icon: 'nutrition', iconOutline: 'nutrition-outline' },
   Progress: { label: 'Gelişim', icon: 'stats-chart', iconOutline: 'stats-chart-outline' },

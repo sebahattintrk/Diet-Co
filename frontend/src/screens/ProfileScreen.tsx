@@ -253,9 +253,6 @@ export const ProfileScreen = () => {
           </View>
 
           <View style={[styles.statBox, styles.statBoxPrimary]}>
-            <View style={styles.primaryStatTag}>
-              <Text style={styles.primaryStatTagText}>CANLI</Text>
-            </View>
             <Text style={[styles.statLabel, { color: '#059669' }]}>GÜNCEL KİLO</Text>
             <Text style={[styles.statNumber, { color: '#064E3B' }]}>
               {currentWeight.toFixed(1)} <Text style={[styles.statSub, { color: '#059669' }]}>kg</Text>

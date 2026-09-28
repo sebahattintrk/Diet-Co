@@ -5,21 +5,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Purchases, { LOG_LEVEL } from 'react-native-purchases';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { useUserStore } from './src/store/userStore';
-import './global.css';
 
 const queryClient = new QueryClient();
 
-// 🔑 RevenueCat API Anahtarları (RevenueCat Dashboard > Project Settings > API Keys)
 const REVENUECAT_KEYS = {
-  apple: 'appl_xxxxxxxxxxxxxxxxxxxxxxxxx',   // App Store Public API Key
-  google: 'goog_xxxxxxxxxxxxxxxxxxxxxxxxx', // Google Play Public API Key
+  apple: 'appl_xxxxxxxxxxxxxxxxxxxxxxxxx',
+  google: 'goog_xxxxxxxxxxxxxxxxxxxxxxxxx',
 };
 
 export default function App() {
   const hydrate = useUserStore((state) => state.hydrate);
   const user = useUserStore((state) => state.user);
 
-  // 1. RevenueCat SDK Başlatma
   useEffect(() => {
     const initPurchases = async () => {
       try {
@@ -39,17 +36,14 @@ export default function App() {
     initPurchases();
   }, []);
 
-  // 2. Kullanıcı Giriş/Oturum Senkronizasyonu
   useEffect(() => {
     if (user?.id) {
       try {
-        // Satın alımları kullanıcının veritabanı ID'sine mühürler
         Purchases.logIn(String(user.id)).catch(() => {});
       } catch (_) {}
     }
   }, [user?.id]);
 
-  // 3. Yerel Kullanıcı Durumunu Yükleme (Hydrate)
   useEffect(() => {
     hydrate();
   }, [hydrate]);
