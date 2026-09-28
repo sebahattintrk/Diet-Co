@@ -13,7 +13,7 @@ module.exports = async function checkLimit(req, res, next) {
 
   try {
     const userRes = await db.query(
-      `SELECT id, is_premium, created_at FROM users WHERE id = $1`,
+      `SELECT id, is_premium FROM users WHERE id = $1`,
       [targetUserId]
     );
 
@@ -30,21 +30,7 @@ module.exports = async function checkLimit(req, res, next) {
       return next();
     }
 
-    // 2. 14 Günlük Deneme Kontrolü
-    const userCreatedDate = new Date(user.created_at || Date.now());
-    const now = new Date();
-    const diffDays = Math.floor(Math.abs(now.getTime() - userCreatedDate.getTime()) / (1000 * 60 * 60 * 24));
-
-    if (diffDays > 14) {
-      return res.status(403).json({
-        error: '14 günlük ücretsiz AI Koç deneme süreniz sona erdi. Sınırsız sohbet için PRO üyeliğe geçin.',
-        code: 'TRIAL_EXPIRED',
-        isPro: false,
-        remainingQuestions: 0,
-      });
-    }
-
-    // 3. Günlük Limit Kontrolü (3 ücretsiz hak verilir, 4. mesajda PRO'ya geç der)
+    // 2. Ücretsiz Kullanıcılar İçin Günlük 3 Soru Limiti Kontrolü
     const countRes = await db.query(
       `SELECT COUNT(*)::int AS count 
        FROM chat_messages 
@@ -54,12 +40,12 @@ module.exports = async function checkLimit(req, res, next) {
       [targetUserId]
     );
 
-    const todayUsed = countRes.rows[0]?.count || 0;
-    const DAILY_FREE_QUESTIONS = 3; // Kullanıcının atabileceği ücretsiz mesaj sayısı
+    const todayUsed = Number(countRes.rows[0]?.count || 0);
+    const DAILY_FREE_QUESTIONS = 3;
 
     console.log(`[Limit Kontrolü] Kullanıcı: ${targetUserId} | Bugün Kullanılan: ${todayUsed} / ${DAILY_FREE_QUESTIONS}`);
 
-    // Kullanıcı 3 hakkını kullandıysa, 4. soruyu sorduğu an (todayUsed >= 3) engellenir
+    // Kullanıcı 3 sorusunu tamamladıysa 4. soruda doğrudan 429 döndür ve engelle
     if (todayUsed >= DAILY_FREE_QUESTIONS) {
       return res.status(429).json({
         error: 'Bugünkü 3 ücretsiz AI Koç hakkınızı doldurdunuz. Sınırsız koçluk için PRO üyeliğe geçin.',
