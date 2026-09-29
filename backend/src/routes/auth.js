@@ -372,8 +372,8 @@ router.post('/send-feedback', async (req, res) => {
   try {
     const resend = new Resend(apiKey);
     const data = await resend.emails.send({
-      from: 'Diet-Co Destek <onboarding@resend.dev>',
-      to: ['kurumsal@dietcoapp.com'],
+      from: 'Diet-Co Destek <destek@dietcoapp.com>', // Doğrulanan domain üzerinden resmi gönderici
+      to: ['kurumsal@dietcoapp.com'], // Webmail kutun
       reply_to: senderEmail !== 'Belirtilmedi' ? senderEmail : undefined,
       subject: `[Diet-Co Bildirim] ${subject}`,
       html: `
