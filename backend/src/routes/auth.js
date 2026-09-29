@@ -374,17 +374,34 @@ router.post('/send-feedback', async (req, res) => {
 
     try {
       const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST || 'smtp.gmail.com',
-        port: Number(process.env.SMTP_PORT) || 587,
-        secure: false, // TLS
-        connectionTimeout: 5000, // En fazla 5 saniye dene, kilitleme
-        greetingTimeout: 5000,
-        socketTimeout: 5000,
+        host: process.env.SMTP_HOST || 'mail.dietcoapp.com',
+        port: Number(process.env.SMTP_PORT) || 465,
+        secure: true, // 465 portu için true olmalı
         auth: {
-          user: process.env.SMTP_USER,
+          user: process.env.SMTP_USER || 'kurumsal@dietcoapp.com',
           pass: process.env.SMTP_PASS,
         },
+        tls: {
+          rejectUnauthorized: false, // cPanel self-signed SSL engeline takılmasını önler
+        },
       });
+
+      const info = await transporter.sendMail({
+        from: `"Diet-Co Destek" <${process.env.SMTP_USER || 'kurumsal@dietcoapp.com'}>`,
+        to: 'kurumsal@dietcoapp.com',
+        replyTo: senderEmail !== 'Belirtilmedi' ? senderEmail : undefined,
+        subject: `[Kullanıcı Bildirimi] ${subject}`,
+        html: `
+          <h3>Diet-Co Uygulamasından Yeni Geri Bildirim</h3>
+          <p><strong>Gönderen:</strong> ${senderName} (${senderEmail})</p>
+          <p><strong>Kullanıcı ID:</strong> ${targetUserId}</p>
+          <p><strong>Konu:</strong> ${subject}</p>
+          <hr />
+          <p><strong>Mesaj:</strong></p>
+          <p style="white-space: pre-wrap;">${message}</p>
+        `,
+      });
+      console.log('✅ Webmail Gönderimi Başarılı! Message ID:', info.messageId);
 
       await transporter.sendMail({
         from: `"Diet-Co Destek" <${process.env.SMTP_USER}>`,
