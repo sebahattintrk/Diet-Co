@@ -29,6 +29,30 @@ app.use('/api/meal-plan', mealPlanRoutes);
 app.use('/api/exercises', exercisesRoutes);
 app.use('/api/supplements', supplementsRoutes);
 app.use('/api/progress', require('./routes/progress'));
+
+// Öğün silme için doğrudan kök yakalayıcı (Hem /api/progress/meal hem /progress/meal hem de /api/progress/meal/:id için)
+const db = require('./db');
+app.delete(['/api/progress/meal/:id', '/progress/meal/:id'], async (req, res) => {
+  const mealId = Number(req.params.id);
+  console.log(`🗑️ [SİLME İSTEĞİ GELDİ] Öğün ID: ${mealId}`);
+
+  if (!mealId || isNaN(mealId)) {
+    return res.status(400).json({ error: 'Geçersiz öğün kimliği.' });
+  }
+
+  try {
+    const result = await db.query('DELETE FROM food_logs WHERE id = $1 RETURNING *', [mealId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Öğün bulunamadı.' });
+    }
+    console.log(`✅ [ÖĞÜN SİLİNDİ] ID: ${mealId}, İsim: ${result.rows[0].food_name}`);
+    return res.json({ success: true, message: 'Öğün başarıyla kaldırıldı.', deletedMeal: result.rows[0] });
+  } catch (error) {
+    console.error('🔥 [Öğün Silme Hatası]:', error);
+    return res.status(500).json({ error: 'Öğün silinirken hata oluştu.' });
+  }
+});
+
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/water', waterRouter);
 

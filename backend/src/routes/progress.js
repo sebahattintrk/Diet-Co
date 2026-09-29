@@ -158,4 +158,33 @@ Görev: Bu verilere dayanarak danışanına samimi, profesyonel bir ${period ===
   }
 });
 
+// DELETE /meal/:id -> index.js içindeki '/api/progress' ile birleştiğinde '/api/progress/meal/:id' olur
+router.delete('/meal/:id', async (req, res) => {
+  const mealId = Number(req.params.id);
+
+  if (!mealId || isNaN(mealId)) {
+    return res.status(400).json({ error: 'Geçersiz öğün kimliği.' });
+  }
+
+  try {
+    const result = await db.query(
+      'DELETE FROM food_logs WHERE id = $1 RETURNING *',
+      [mealId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Öğün bulunamadı.' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Öğün başarıyla kaldırıldı.',
+      deletedMeal: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Öğün silme hatası:', error);
+    return res.status(500).json({ error: 'Öğün silinirken hata oluştu: ' + error.message });
+  }
+});
+
 module.exports = router;

@@ -5,6 +5,7 @@ import {
   Text,
   ScrollView,
   Pressable,
+  TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
   Alert,
@@ -66,7 +67,9 @@ export function ProgressScreen() {
 
   const fetchProgress = useCallback(async (silent = false) => {
     try {
-      const res = await api.get<ProgressData>(`/api/progress/${userId}`);
+      const res = await api.get<ProgressData>(`/progress/${userId}`).catch(() => 
+        api.get<ProgressData>(`/api/progress/${userId}`)
+      );
       setData(res.data);
     } catch (err) {
       console.error('Progress fetch error:', err);
@@ -83,7 +86,7 @@ export function ProgressScreen() {
     fetchProgress(false);
   }, [fetchProgress]);
 
-  // ⚡ Sekmeye her basıldığında veya ekrana dönüldüğünde arka planda sessizce taze veriyi çek
+  // Sekmeye her basıldığında veya ekrana dönüldüğünde arka planda sessizce taze veriyi çek
   useFocusEffect(
     useCallback(() => {
       if (userId) {
@@ -97,6 +100,38 @@ export function ProgressScreen() {
     fetchProgress(false);
   };
 
+  const handleDeleteMeal = async (mealId: number, foodName: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Alert.alert(
+      'Öğünü Kaldır',
+      `Yanlış girdiğinizi düşünüyorsanız kaldırabilirsiniz öğünü.\n\n"${foodName}" öğününü kaldırmak istiyor musunuz?`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        {
+          text: 'Kaldır',
+          style: 'destructive',
+          onPress: async () => {
+            console.log('--- SİLME BAŞLADI ---');
+            console.log('İstek atılan Base URL:', api.defaults.baseURL);
+            console.log('Silinecek ID:', mealId);
+
+            try {
+              const res = await api.delete(`/api/progress/meal/${mealId}`);
+              console.log('Silme başarılı yanıt:', res.data);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              fetchProgress(true);
+            } catch (err: any) {
+              console.log('Tam URL:', (err.config?.baseURL || '') + (err.config?.url || ''));
+              console.log('Hata Kodu:', err?.response?.status);
+              console.log('Sunucu Yanıtı:', err?.response?.data);
+              Alert.alert('Hata', `404 Hatası! İstek atılan yer: ${(err.config?.baseURL || '') + (err.config?.url || '')}`);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleGenerateReport = async (period: 'daily' | 'weekly' | 'monthly') => {
     setReportPeriod(period);
     setReportLoading(true);
@@ -104,7 +139,9 @@ export function ProgressScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      const res = await api.post<{ report: string }>(`/api/progress/${userId}/ai-report`, { period });
+      const res = await api.post<{ report: string }>(`/progress/${userId}/ai-report`, { period }).catch(() =>
+        api.post<{ report: string }>(`/api/progress/${userId}/ai-report`, { period })
+      );
       setAiReport(res.data.report);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err: any) {
@@ -255,12 +292,47 @@ export function ProgressScreen() {
                     idx === data.today.meals.length - 1 && { borderBottomWidth: 0 },
                   ]}
                 >
-                  <View style={{ flex: 1, paddingRight: 8 }}>
+                  {/* Kırmızı Yuvarlak Eksi Butonu */}
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                    onPress={() => handleDeleteMeal(m.id, m.food_name)}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      minWidth: 22,
+                      minHeight: 22,
+                      borderRadius: 11,
+                      backgroundColor: '#EF4444',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: 10,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: '#FFFFFF',
+                        fontSize: 15,
+                        fontWeight: '900',
+                        lineHeight: 16,
+                        textAlign: 'center',
+                        marginTop: -2,
+                      }}
+                    >
+                      -
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Yemek Başlığı ve Makro Detayları */}
+                  <View style={styles.mealTextWrapper}>
                     <Text style={styles.mealItemTitle} numberOfLines={1}>{m.food_name}</Text>
-                    <Text style={styles.mealItemMeta}>
+                    <Text style={styles.mealItemMeta} numberOfLines={1}>
                       Saat {m.time} · {m.protein_g}g Protein · {m.carbs_g}g Karb
                     </Text>
                   </View>
+
+                  {/* Sağ Kalori Rozeti */}
                   <View style={styles.badgeCal}>
                     <Text style={styles.badgeCalText}>+{m.calories} kcal</Text>
                   </View>
@@ -333,7 +405,7 @@ export function ProgressScreen() {
             </View>
           )}
 
-          {/* ⚡ RAPOR VERİ TABLOSU VE İÇGÖRÜLER */}
+          {/* RAPOR VERİ TABLOSU VE İÇGÖRÜLER */}
           {aiReport && !reportLoading && (
             <View style={{ marginTop: 10 }}>
               <View style={styles.tableCard}>
@@ -465,7 +537,6 @@ function ReportCardsViewer({ report }: { report: string }) {
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  // Ekran Başlığı
   screenHeader: {
     paddingVertical: 6,
     marginBottom: 8,
@@ -484,7 +555,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // Kart Çerçevesi
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 22,
@@ -526,7 +596,6 @@ const styles = StyleSheet.create({
     color: '#6B7280',
   },
 
-  // Ortalı Kalori Bloğu
   primaryCalorieBox: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -583,7 +652,6 @@ const styles = StyleSheet.create({
     color: '#DC2626',
   },
 
-  // Makro Şeridi
   macroStripContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -622,7 +690,6 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 
-  // Yemek Öğeleri
   countBadge: {
     backgroundColor: '#F3F4F6',
     paddingHorizontal: 8,
@@ -637,10 +704,13 @@ const styles = StyleSheet.create({
   mealItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
+  },
+  mealTextWrapper: {
+    flex: 1,
+    marginRight: 8,
   },
   mealItemTitle: {
     color: '#111827',
@@ -654,9 +724,10 @@ const styles = StyleSheet.create({
   },
   badgeCal: {
     backgroundColor: '#ECFDF5',
-    paddingHorizontal: 9,
+    paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 10,
+    borderRadius: 8,
+    flexShrink: 0,
   },
   badgeCalText: {
     color: '#059669',
@@ -684,7 +755,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
-  // Rapor Bölümü
   reportIntroText: {
     color: '#6B7280',
     fontSize: 12.5,
@@ -727,7 +797,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Tablo
   tableCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
@@ -787,7 +856,6 @@ const styles = StyleSheet.create({
   pillSlate: { backgroundColor: '#F3F4F6' },
   pillTextSlate: { color: '#4B5563' },
 
-  // AI Tavsiye Kartları
   aiCard: {
     borderRadius: 14,
     padding: 12,
