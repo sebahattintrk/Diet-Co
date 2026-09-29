@@ -3,6 +3,9 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
+// Türkiye saatine göre gün devreden SQL tarih tanımı
+const ACTIVE_DATE_SQL = `((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul') - INTERVAL '3 hours')::date`;
+
 router.post('/add', async (req, res) => {
   const { userId, amount } = req.body;
   const targetUserId = Number(userId);
@@ -13,10 +16,9 @@ router.post('/add', async (req, res) => {
   }
 
   try {
-    // SADECE İSTEĞİ ATAN KULLANICIYA VE BUGÜNE AİT KAYDI GÜNCELLE
     const result = await db.query(
       `INSERT INTO daily_logs (user_id, log_date, water_ml)
-       VALUES ($1, CURRENT_DATE, $2)
+       VALUES ($1, ${ACTIVE_DATE_SQL}, $2)
        ON CONFLICT (user_id, log_date)
        DO UPDATE SET water_ml = COALESCE(daily_logs.water_ml, 0) + EXCLUDED.water_ml
        RETURNING water_ml;`,

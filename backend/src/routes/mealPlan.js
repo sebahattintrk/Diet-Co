@@ -212,7 +212,17 @@ async function getTodayPlan(userId) {
 
 async function generatePlan(user) {
   const exclude = await recentMealNames(user.id, RECENT_NAMES_TO_EXCLUDE);
-  const aiMeals = await generateMeals({ user, excludeNames: exclude });
+  
+  // ⚡ HIZ OPTİMİZASYONU: Kullanıcıyı asla beyaz ekranda dakikalarca bekletme
+  // 4 saniyeden uzun sürerse beklemeden anında zengin fallback planını dön
+  let aiMeals;
+  try {
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000));
+    aiMeals = await Promise.race([generateMeals({ user, excludeNames: exclude }), timeoutPromise]);
+  } catch (e) {
+    const { generateFallbackMeals } = require('../services/mealGenerator');
+    aiMeals = generateFallbackMeals(user);
+  }
 
   let bySlot = {};
   let idsBySlot = { breakfast: null, lunch: null, dinner: null, snack: null };
@@ -230,18 +240,10 @@ async function generatePlan(user) {
         breakfast_snapshot, lunch_snapshot, dinner_snapshot, snack_snapshot
      ) VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (user_id, plan_date) DO UPDATE SET
-       breakfast_id       = EXCLUDED.breakfast_id,
-       lunch_id           = EXCLUDED.lunch_id,
-       dinner_id          = EXCLUDED.dinner_id,
-       snack_id           = EXCLUDED.snack_id,
        breakfast_snapshot = EXCLUDED.breakfast_snapshot,
        lunch_snapshot     = EXCLUDED.lunch_snapshot,
        dinner_snapshot    = EXCLUDED.dinner_snapshot,
-       snack_snapshot     = EXCLUDED.snack_snapshot,
-       breakfast_done     = FALSE,
-       lunch_done         = FALSE,
-       dinner_done        = FALSE,
-       snack_done         = FALSE
+       snack_snapshot     = EXCLUDED.snack_snapshot
      RETURNING *`,
     [
       user.id,

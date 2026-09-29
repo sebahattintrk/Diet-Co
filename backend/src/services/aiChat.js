@@ -4,7 +4,6 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-// 1. BİLİMSEL HESAPLAMA MOTORU (Mifflin-St Jeor)
 function calculateNutritionMetrics(user) {
   const age = user.calculated_age || user.age || 20;
   const weight = parseFloat(user.weight_kg || user.weight) || 70;
@@ -55,7 +54,6 @@ function calculateNutritionMetrics(user) {
   };
 }
 
-// 2. KİLO DEĞİŞTİĞİNDE VERİTABANINI VE KALORİLERİ GÜNCELLEYEN FONKSİYON
 async function updateUserWeight(userId, newWeight) {
   try {
     const userRes = await db.query(`
@@ -99,12 +97,6 @@ async function updateUserWeight(userId, newWeight) {
       `, [userId, newWeight]);
     } catch (_) {}
 
-    console.log("\n⚡ =================== [CANLI KİLO GÜNCELLEMESİ] =================== ⚡");
-    console.log(`KULLANICI ID     : ${userId} (${user.name})`);
-    console.log(`YENİ KİLO        : ${newWeight} kg`);
-    console.log(`YENİ HEDEF       : ${metrics.targetCalories} kcal | Protein: ${metrics.targetProtein}g`);
-    console.log("=================================================================\n");
-
     return result.rows[0];
   } catch (err) {
     console.error("Kilo güncelleme hatası:", err);
@@ -112,7 +104,6 @@ async function updateUserWeight(userId, newWeight) {
   }
 }
 
-// 3. DİNAMİK PROMPT OLUŞTURUCU
 async function buildDynamicCoachPrompt(userId) {
   const res = await db.query(`
     SELECT 
@@ -138,22 +129,23 @@ Kullanıcının ANLIK VERİLERİ:
 - Günlük Kalori Hedefi: ${metrics.targetCalories} kcal
 - Günlük Protein Hedefi: ${metrics.targetProtein} g
 
-🚨 ÖZEL GÖREV - AKILLI KİLO GÜNCELLEME:
-Kullanıcı kilo verdiğini, kilo aldığını veya yeni bir kiloya ulaştığını söylerse (Örn: "2 kilo verdim", "121 kiloya düştüm", "120 oldum", "3 kilo aldım"):
+🚨 ÖZEL GÖREV - HEDEFE DUYARLI KİLO GÜNCELLEME:
+Kullanıcı kilo verdiğini, kilo aldığını veya yeni bir kiloya ulaştığını söylerse (Örn: "2 kilo verdim", "70 kiloya düştüm", "70 oldum", "3 kilo aldım"):
 1. Kullanıcının şu anki kilosu: ${metrics.weight} kg.
 2. Yeni net kiloyu hesapla.
-3. Cevabının EN BAŞINA TAM OLARAK ŞU ETİKETİ KOY: [GUNCEL_KILO: YENI_KILO] (Örn: [GUNCEL_KILO: 120]).
-4. Ardından kullanıcıyı içtenlikle tebrik et, yeni kilosunun sisteme kaydedildiğini ve kalori hedeflerinin güncellendiğini açıkla.
+3. Cevabının EN BAŞINA TAM OLARAK ŞU ETİKETİ KOY: [GUNCEL_KILO: YENI_KILO] (Örn: [GUNCEL_KILO: 70]).
+4. KURAL: 
+   - Eğer hedef 'muscle_gain' veya 'weight_gain' ise ve kullanıcı kilo kaybettiyse KESİNLİKLE TEBRİK ETME. Kas kazanımı için kalori açığı oluşmaması gerektiğini, öğünleri tam tüketmesi gerektiğini söyle.
+   - Eğer hedef 'fat_loss' veya 'weight_loss' ise ve kullanıcı kilo aldıysa KESİNLİKLE TEBRİK ETME. Su/ödem olabileceğini ve programa sadık kalınması gerektiğini söyle.
+   - Yalnızca hedefle aynı yönde bir ilerleme varsa içtenlikle tebrik et.
 `;
 }
 
-// 4. MESAJ YANITLAMA (HATA KORUMALI)
 async function generateChatResponse(userId, userMessage, conversationHistory = []) {
   const systemPrompt = await buildDynamicCoachPrompt(userId);
 
-  // Doğrulanmış ana model
   const model = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: 'gemini-3.6-flash',
     systemInstruction: systemPrompt,
   });
 
@@ -182,11 +174,10 @@ async function generateChatResponse(userId, userMessage, conversationHistory = [
     const result = await chat.sendMessage(userMessage);
     replyText = result.response.text();
   } catch (aiErr) {
-    console.error("Gemini AI İstek Hatası (Fallback Devrede):", aiErr.message);
-    replyText = "Harika bir ilerleme! Kilonuz ve hedefleriniz doğrultusunda sistemimiz güncellendi. İstikrarlı şekilde devam ediyoruz! 💪";
+    console.error("Gemini AI İstek Hatası:", aiErr.message);
+    replyText = "Kilonuz sisteme kaydedildi ve hedefleriniz revize edildi. Hedefimize odaklanarak devam ediyoruz! 💪";
   }
 
-  // Etiketi yakala ve veritabanını güncelle
   const weightMatch = replyText.match(/\[GUNCEL_KILO:\s*([\d\.]+)\]/i);
   if (weightMatch) {
     const parsedWeight = parseFloat(weightMatch[1]);
@@ -195,7 +186,6 @@ async function generateChatResponse(userId, userMessage, conversationHistory = [
     }
     replyText = replyText.replace(/\[GUNCEL_KILO:\s*[\d\.]+\]/i, '').trim();
   } else {
-    // Kullanıcı açıkça kilo belirttiyse ama model etiketi unuttuysa metinden yakala ve güncelle
     const textLower = userMessage.toLowerCase();
     const directMatch = textLower.match(/(\d{2,3}(?:\.\d+)?)\s*(?: kilo|kg)?\s*(?:oldum|dustum|çıktım|kiloyum)/);
     if (directMatch) {

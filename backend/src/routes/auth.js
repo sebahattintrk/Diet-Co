@@ -4,6 +4,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
+const { generateFallbackMeals } = require('../services/mealGenerator');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fitintel_super_secret_jwt_key_2026';
 
@@ -97,11 +98,11 @@ router.post('/complete-registration', async (req, res) => {
       formattedDislikedFoods = disliked_foods.split(',').map((i) => i.trim()).filter(Boolean);
     }
 
-    // 3. Kullanıcıyı ve tüm verileri tek hamlede kaydet
+    // 3. Kullanıcıyı oluştur
     const insertQuery = `
       INSERT INTO users (
         name, email, password_hash, is_premium, trial_ends_at,
-        goal, birth_date, age, height_cm, weight_kg,
+        goal, gender, birth_date, age, height_cm, weight_kg,
         waist_cm, arm_cm, shoulder_cm, right_leg_cm, left_leg_cm,
         chest_cm, hip_cm, workout_days_per_week, workout_hours_per_day,
         occupation, work_activity_level, health_conditions, disliked_foods, budget,
@@ -109,11 +110,11 @@ router.post('/complete-registration', async (req, res) => {
         daily_ai_count, last_ai_date
       ) VALUES (
         $1, $2, $3, false, NOW() - INTERVAL '1 hour',
-        $4, $5, $6, $7, $8,
-        $9, $10, $11, $12, $13,
-        $14, $15, $16, $17,
-        $18, $19, $20, $21, $22,
-        $23, $24, $25, $26,
+        $4, $5, $6, $7, $8, $9,
+        $10, $11, $12, $13, $14,
+        $15, $16, $17, $18,
+        $19, $20, $21, $22, $23,
+        $24, $25, $26, $27,
         0, CURRENT_DATE
       )
       RETURNING *;
@@ -124,6 +125,7 @@ router.post('/complete-registration', async (req, res) => {
       email.toLowerCase().trim(),
       hash,
       goal || 'fat_loss',
+      gender || 'male',
       birth_date || null,
       finalAge,
       height,
@@ -151,6 +153,44 @@ router.post('/complete-registration', async (req, res) => {
     const result = await db.query(insertQuery, values);
     const user = result.rows[0];
     delete user.password_hash;
+
+    // ⚡ 4. ANINDA 1 SANİYEDE ÖĞÜN OLUŞTURMA:
+    // Kullanıcı için ilk günün beslenme planını hemen oluştur ve kaydet
+    try {
+      const initialMeals = generateFallbackMeals(user);
+      const bySlot = {};
+      for (const m of initialMeals) {
+        bySlot[m.slot] = {
+          slot: m.slot,
+          category: m.category,
+          name: m.name,
+          description: m.description,
+          calories: m.calories,
+          protein_g: m.protein_g,
+          carbs_g: m.carbs_g,
+          fats_g: m.fats_g,
+          tags: m.tags || [],
+          serving_size_g: m.serving_size_g,
+          prep_time_min: m.prep_time_min,
+          ingredients: m.ingredients,
+          rationale: m.rationale,
+          source: 'initial_smart',
+        };
+      }
+
+      await db.query(
+        `INSERT INTO meal_plans (
+          user_id, plan_date,
+          breakfast_snapshot, lunch_snapshot, dinner_snapshot, snack_snapshot
+        ) VALUES (
+          $1, CURRENT_DATE,
+          $2, $3, $4, $5
+        ) ON CONFLICT (user_id, plan_date) DO NOTHING;`,
+        [user.id, bySlot.breakfast, bySlot.lunch, bySlot.dinner, bySlot.snack]
+      );
+    } catch (planErr) {
+      console.warn('İlk plan oluşturma uyarısı:', planErr.message);
+    }
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
     return res.status(201).json({ success: true, token, user });

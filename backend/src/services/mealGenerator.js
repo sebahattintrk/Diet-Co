@@ -264,4 +264,4 @@ function normalizeMeal(m) {
   };
 }
 
-module.exports = { generateMeals };
+module.exports = { generateMeals, generateFallbackMeals };

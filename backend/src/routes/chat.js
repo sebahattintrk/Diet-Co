@@ -8,7 +8,6 @@ const { generateMedicalConstraints } = require('../services/healthFilter');
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const checkLimit = require('../middleware/checkLimit');
 
-// Türkiye saatine göre gece 03:00'te gün devreden SQL tarih tanımı
 const ACTIVE_DATE_SQL = `((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul') - INTERVAL '3 hours')::date`;
 
 function calculateNutrition(u, newWeight) {
@@ -61,7 +60,7 @@ function parseWeightFromText(rawText, currentWeight) {
 
   if (val <= 20) {
     if (/verdim|dustum|kaybettim|gitti|eksildim/.test(text)) return Math.max(30, currentWeight - val);
-    if (/aldim/.test(text)) return currentWeight + val;
+    if (/aldim/.test(text) && /kilo|kg/.test(text)) return currentWeight + val;
   }
 
   if (val >= 35 && val <= 280) {
@@ -71,7 +70,9 @@ function parseWeightFromText(rawText, currentWeight) {
   return null;
 }
 
-function extractFoodLog(replyText, userMessage) {
+function extractFoodLog(replyText, userMessage, isWeightUpdate = false) {
+  if (isWeightUpdate) return null;
+
   let parsed = null;
 
   const tagMatch = replyText.match(/\[BESIN_KAYIT:\s*(\{.*?\})\s*\]/i);
@@ -90,7 +91,10 @@ function extractFoodLog(replyText, userMessage) {
     }
   }
 
-  if (!parsed && /yedim|içtim|ictim|tükettim|yendi|kahvaltı|öğün|atıştırdım/i.test(userMessage)) {
+  const hasFoodAction = /yedim|içtim|ictim|tükettim|yendi|kahvaltı|öğün|atıştırdım/i.test(userMessage);
+  const isWeightContext = /kilo aldım|kilo verdim|tartıldım|kg oldum|kilo olarak güncelle/i.test(userMessage);
+
+  if (!parsed && hasFoodAction && !isWeightContext) {
     const calMatch = replyText.match(/(?:Kalori|kcal)\s*[:=~]?\s*(\d+)/i);
     const proMatch = replyText.match(/Protein\s*[:=~]?\s*(\d+(?:\.\d+)?)/i);
     const carbMatch = replyText.match(/(?:Karbonhidrat|Karb)\s*[:=~]?\s*(\d+(?:\.\d+)?)/i);
@@ -109,17 +113,6 @@ function extractFoodLog(replyText, userMessage) {
         fats_g: fatMatch ? parseFloat(fatMatch[1]) : 0,
       };
     }
-  }
-
-  if (!parsed && /yedim|içtim|ictim|tükettim/i.test(userMessage)) {
-    const cleanName = userMessage.replace(/yedim|içtim|ictim|tükettim/gi, '').trim();
-    parsed = {
-      food_name: cleanName ? cleanName.charAt(0).toUpperCase() + cleanName.slice(1) : 'Tüketilen Öğün',
-      calories: 250,
-      protein_g: 12,
-      carbs_g: 25,
-      fats_g: 8,
-    };
   }
 
   return parsed;
@@ -147,9 +140,7 @@ router.post('/', checkLimit, async (req, res) => {
     const displayName = u.name ? u.name.trim() : 'Dostum';
     const lowerMsg = message.trim().toLowerCase();
 
-    // ----------------------------------------------------
-    // 💧 1. SADECE SU BARINI SIFIRLAMA
-    // ----------------------------------------------------
+    // 1. SU BARINI SIFIRLAMA
     if (
       /suyumu sıfırla|suyumu sifirla|suyu sıfırla|suyu sifirla|suyu temizle|su tüketimini sıfırla/i.test(lowerMsg) ||
       (/su|suları|sulari/i.test(lowerMsg) && /sıfırla|sifirla|temizle/i.test(lowerMsg))
@@ -178,16 +169,13 @@ router.post('/', checkLimit, async (req, res) => {
       });
     }
 
-    // ----------------------------------------------------
-    // 🗑️ 2. TÜM ÖĞÜNLERİ SİLME (GEÇMİŞ DAHİL TÜM ÖĞÜNLER VE SUYU SIFIRLAR)
-    // ----------------------------------------------------
+    // 2. TÜM ÖĞÜNLERİ SİLME
     if (
       /tüm öğünlerimi sil|tum ogunlerimi sil|bütün öğünlerimi sil|butun ogunlerimi sil|tüm yediklerimi sil|tum yediklerimi sil|bütün yediklerimi sil|öğünlerimin hepsini sil/i.test(lowerMsg) ||
       (/tüm|tum|bütün|butun|hepsini/i.test(lowerMsg) && /öğün|ogun|yemek|yediklerim/i.test(lowerMsg) && /sil|kaldır|kaldir|temizle/i.test(lowerMsg))
     ) {
       await db.query(`DELETE FROM food_logs WHERE user_id = $1`, [targetUserId]);
       
-      // Su barını da sıfırla
       await db.query(`
         INSERT INTO daily_logs (user_id, log_date, water_ml)
         VALUES ($1, ${ACTIVE_DATE_SQL}, 0)
@@ -212,14 +200,10 @@ router.post('/', checkLimit, async (req, res) => {
       });
     }
 
-    // ----------------------------------------------------
-    // 🗑️ 3. SADECE BUGÜNKÜ YEDİKLERİMİ VE SUYU SIFIRLAMA
-    // ----------------------------------------------------
+    // 3. BUGÜNKÜ YEDİKLERİMİ VE SUYU SIFIRLAMA
     if (/sıfırla|sifirla|temizle|yanlış yedim|yanlis yedim/i.test(lowerMsg) && /bugün|bugun|öğün|yemek|yediklerim|günü/i.test(lowerMsg)) {
-      // 1. Bugünkü öğünleri sil
       await db.query(`DELETE FROM food_logs WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL}`, [targetUserId]);
 
-      // 2. Bugünkü su barını da sıfırla
       await db.query(`
         INSERT INTO daily_logs (user_id, log_date, water_ml)
         VALUES ($1, ${ACTIVE_DATE_SQL}, 0)
@@ -244,9 +228,7 @@ router.post('/', checkLimit, async (req, res) => {
       });
     }
 
-    // ----------------------------------------------------
-    // 🗑️ 4. SPESİFİK TEK BİR ÖĞÜNÜ SİLME (SON ÖĞÜN)
-    // ----------------------------------------------------
+    // 4. SON ÖĞÜNÜ SİLME
     if (/sil|kaldır|kaldir/i.test(lowerMsg) && /öğün|yemek|yediğim|yedigim/i.test(lowerMsg)) {
       const lastFoodRes = await db.query(
         `SELECT id, food_name FROM food_logs WHERE user_id = $1 AND log_date = ${ACTIVE_DATE_SQL} ORDER BY id DESC LIMIT 1`,
@@ -286,11 +268,14 @@ router.post('/', checkLimit, async (req, res) => {
       console.warn('chat_messages kullanıcı mesajı kayıt uyarısı:', saveUserMsgErr.message);
     }
 
+    // Kilo güncellemesi tespiti
     let currentWeight = parseFloat(u.weight_kg || 75);
     const detectedWeight = parseWeightFromText(message, currentWeight);
     let weightUpdated = false;
+    let weightDiff = 0;
 
     if (detectedWeight && detectedWeight !== currentWeight) {
+      weightDiff = Number((detectedWeight - currentWeight).toFixed(1));
       const newMetrics = calculateNutrition(u, detectedWeight);
 
       await db.query(`
@@ -337,20 +322,66 @@ router.post('/', checkLimit, async (req, res) => {
       ? generateMedicalConstraints(u.health_conditions)
       : '';
 
+    // 📏 KULLANICININ VÜCUT ÖLÇÜLERİ ANALİZİ
+    const measurementsBlock = `
+DANİŞANIN VÜCUT ÖLÇÜLERİ:
+- Bel Çevresi: ${u.waist_cm ? `${u.waist_cm} cm` : 'Belirtilmedi'}
+- Kol Çevresi: ${u.arm_cm ? `${u.arm_cm} cm` : 'Belirtilmedi'}
+- Omuz Çevresi: ${u.shoulder_cm ? `${u.shoulder_cm} cm` : 'Belirtilmedi'}
+- Sağ/Sol Bacak: ${u.right_leg_cm ? `${u.right_leg_cm} cm` : 'Belirtilmedi'}
+- Göğüs: ${u.chest_cm ? `${u.chest_cm} cm` : 'Belirtilmedi'}
+- Kalça: ${u.hip_cm ? `${u.hip_cm} cm` : 'Belirtilmedi'}
+${u.waist_cm && u.shoulder_cm ? `- Omuz/Bel Oranı: ${(Number(u.shoulder_cm) / Number(u.waist_cm)).toFixed(2)} (V-Taper Analizi)` : ''}
+
+🎯 ÖLÇÜ BAZLI KOÇLUK KURALI:
+Eğer danışanın bel çevresi genişse karbonhidrat zamanlamasına ve insülin hassasiyetine dikkat et. Omuz/kol hacmi hedefliyorsa protein dağılımını ve progressive overload motivasyonunu buna göre kurgula.`;
+
+    // 🎯 HEDEFE DUYARLI KİLO GELİŞİM DEĞERLENDİRMESİ
+    let weightContextPrompt = '';
+    const userGoal = u.goal || 'maintain';
+
+    if (weightUpdated) {
+      const isGainGoal = (userGoal === 'weight_gain' || userGoal === 'muscle_gain');
+      const isLossGoal = (userGoal === 'weight_loss' || userGoal === 'fat_loss');
+
+      if (weightDiff < 0 && isGainGoal) {
+        weightContextPrompt = `
+⚠️ DİKKAT (HEDEFLE TERS DURUM): Kullanıcı az önce kilo kaybettiğini bildirdi (${weightDiff} kg azaldı, yeni kilo: ${currentWeight} kg).
+Kullanıcının asıl hedefi KAS KAZANIMI / KİLO ALMAK. 
+Bu yüzden KESİNLİKLE "Tebrikler!", "Harika kilo verdin!" gibi kutlama cümleleri KURMA. 
+Nazikçe kilonun düştüğünü (${currentWeight} kg), kas kazanmak için kalori fazlasına ve öğünleri aksatmamaya odaklanmamız gerektiğini söyle. Motivasyon ver ve yeni hedefin (${targetCal} kcal) doğrultusunda yemesi gerektiğini hatırlat.`;
+      } else if (weightDiff > 0 && isLossGoal) {
+        weightContextPrompt = `
+⚠️ DİKKAT (HEDEFLE TERS DURUM): Kullanıcı az önce kilo aldığını bildirdi (+${weightDiff} kg arttı, yeni kilo: ${currentWeight} kg).
+Kullanıcının asıl hedefi KİLO VERMEK / YAĞ YAKIMI.
+Bu yüzden KESİNLİKLE "Tebrikler!", "Harika kilo aldın!" deme.
+Bunun ödem, su tutumu veya geçici bir dalgalanma olabileceğini söyleyerek moralini bozmaması gerektiğini, disiplinli kalarak hedefe devam edeceğimizi söyle. Yeni kalori hedefi (${targetCal} kcal) güncellendi de.`;
+      } else if ((weightDiff > 0 && isGainGoal) || (weightDiff < 0 && isLossGoal)) {
+        weightContextPrompt = `
+🎉 BAŞARI (HEDEFE UYGUN İLERLEME): Kullanıcı hedefine uygun bir kilo değişimi bildirdi (${weightDiff > 0 ? `+${weightDiff} kg aldı` : `${Math.abs(weightDiff)} kg verdi`}, yeni kilo: ${currentWeight} kg).
+Kullanıcıyı içtenlikle tebrik et, hedefine tam uyum sağladığını söyle ve motivasyonunu artır.`;
+      } else {
+        weightContextPrompt = `
+Kullanıcı yeni kilosunu bildirdi (${currentWeight} kg). Kilosunu başarıyla güncellediğini ve günlük hedeflerini revize ettiğini açıkla.`;
+      }
+    }
+
     const systemInstruction = `
-Sen Diet-Co uygulamasının profesyonel, samimi, net ve motive edici yapay zeka fitness/beslenme koçusun.
+Sen Diet-Co uygulamasının profesyonel, samimi, net ve bilimsel temelli yapay zeka fitness/beslenme koçusun.
 Danışan: ${displayName}
+Cinsiyet: ${u.gender || 'Belirtilmedi'}
 Hedef: ${u.goal || 'Sağlıklı Yaşam'} | Günlük Kalori Hedefi: ${targetCal} kcal
 Bugün Tüketilen: ${eatenCal} kcal | Güncel Kilo: ${currentWeight} kg
-${weightUpdated ? `NOT: Kullanıcı az önce yeni kilosunu bildirdi (${currentWeight} kg). Kilo başarıyla güncellendi!` : ''}
+${weightContextPrompt}
 
+${measurementsBlock}
 ${medicalBlock}
 
-🚨 ÇOK ÖNEMLİ BESİN KAYIT KURALI:
-Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumurta yedim", "protein bar yedim kahve içtim"):
-1. Mesajında danışanına besinlerin yaklaşık kalori, protein, karbonhidrat ve yağ değerlerini kibarca söyle ve hedefine etkisini açıkla.
-2. CEVABININ EN SON SATIRINA KESİNLİKLE VE HİÇ BOZMADAN ŞU JSON ETİKETİNİ KOY:
-[BESIN_KAYIT: {"food_name": "Öğün veya Yiyecek Adı", "calories": 250, "protein_g": 15, "carbs_g": 20, "fats_g": 8}]
+🚨 ÇOK ÖNEMLİ KURALLAR:
+1. Kullanıcı kilo aldığını, kilo verdiğini veya tartı sonucunu söylüyorsa bu bir YEMEK DEĞİLDİR. Asla [BESIN_KAYIT] etiketi üretme.
+2. Kullanıcının hedefiyle ters düşen bir kilo değişimi varsa KESİNLİKLE TEBRİK ETME. Durumu profesyonel bir koç gibi değerlendir.
+3. Yalnızca kullanıcı açıkça bir yiyecek/içecek yediğini/içtiğini belirttiğinde CEVABININ EN SONUNA ŞU ETİKETİ EKLE:
+[BESIN_KAYIT: {"food_name": "Öğün Adı", "calories": 250, "protein_g": 15, "carbs_g": 20, "fats_g": 8}]
 `;
 
     let reply = '';
@@ -360,12 +391,12 @@ Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumur
       const response = await ai.models.generateContent({
         model: 'gemini-3.6-flash',
         contents: message,
-        config: { systemInstruction, temperature: 0.7 },
+        config: { systemInstruction, temperature: 0.6 },
       });
 
       reply = response.text || '';
 
-      const food = extractFoodLog(reply, message);
+      const food = extractFoodLog(reply, message, weightUpdated);
       if (food && food.calories > 0) {
         try {
           await db.query(`
@@ -398,33 +429,17 @@ Kullanıcı bir şey yediğini veya içtiğini belirttiğinde (örneğin: "yumur
 
     } catch (aiErr) {
       console.error('Chat AI hatası:', aiErr.message || aiErr);
-      
-      const fallbackFood = extractFoodLog('', message);
-      if (fallbackFood && fallbackFood.calories > 0) {
-        try {
-          await db.query(`
-            INSERT INTO food_logs (
-              user_id, food_name, calories, protein_g, carbs_g, fats_g, log_date, created_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, ${ACTIVE_DATE_SQL}, (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))
-          `, [
-            targetUserId,
-            fallbackFood.food_name,
-            fallbackFood.calories,
-            fallbackFood.protein_g,
-            fallbackFood.carbs_g,
-            fallbackFood.fats_g,
-          ]);
-          loggedItem = fallbackFood;
-        } catch (_) {}
-      }
+      loggedItem = null;
 
       if (weightUpdated) {
-        reply = `Harika haber ${displayName}! Yeni kilonu (${currentWeight} kg) başarıyla kaydettim ve hedeflerini güncelledim. 💪`;
-      } else if (loggedItem) {
-        reply = `Afiyet olsun ${displayName}! Yediğin ${loggedItem.food_name} (${loggedItem.calories} kcal) günlüğüne ve gelişim sayfana işlendi. Hedefine doğru harika ilerliyorsun! 🥗`;
+        const isGain = (userGoal === 'weight_gain' || userGoal === 'muscle_gain');
+        if (weightDiff < 0 && isGain) {
+          reply = `Kilonu ${currentWeight} kg olarak güncelledim ${displayName}. Kas kazanımı hedeflediğimiz için kilonun düşmesini istemeyiz; günlük ${targetCal} kcal hedefini yakalamaya ve proteinini aksatmamaya odaklanalım. 💪`;
+        } else {
+          reply = `Kilonu ${currentWeight} kg olarak sisteme kaydettim ${displayName}. Günlük kalori bütçeni ${targetCal} kcal olarak revize ettim.`;
+        }
       } else {
-        reply = `Mesajını aldım ${displayName}! Günlük hedeflerine sadık kalarak harika bir disiplin sergiliyorsun. Tempoyu koruyalım! 💪`;
+        reply = `Şu an bağlantıda kısa bir gecikme oldu ${displayName}. Lütfen 10-15 saniye sonra tekrar dene.`;
       }
     }
 
