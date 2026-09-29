@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
 const { generateFallbackMeals } = require('../services/mealGenerator');
+const { Resend } = require('resend');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fitintel_super_secret_jwt_key_2026';
 
@@ -155,7 +156,6 @@ router.post('/complete-registration', async (req, res) => {
     delete user.password_hash;
 
     // ⚡ 4. ANINDA 1 SANİYEDE ÖĞÜN OLUŞTURMA:
-    // Kullanıcı için ilk günün beslenme planını hemen oluştur ve kaydet
     try {
       const initialMeals = generateFallbackMeals(user);
       const bySlot = {};
@@ -335,9 +335,6 @@ router.put('/measurements', async (req, res) => {
 });
 
 // POST /api/auth/send-feedback
-const nodemailer = require('nodemailer');
-
-// POST /api/auth/send-feedback
 router.post('/send-feedback', async (req, res) => {
   const { userId, name, email, subject, message } = req.body;
 
@@ -365,7 +362,7 @@ router.post('/send-feedback', async (req, res) => {
   // 2. Resend API ile Gönderim
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
-    console.error('⚠️️ [RESEND HATA]: RESEND_API_KEY ortam değişkeni tanımlı değil!');
+    console.error('⚠ [RESEND HATA]: RESEND_API_KEY ortam değişkeni tanımlı değil!');
     return res.json({
       success: true,
       message: 'Geri bildiriminiz veritabanına kaydedildi.',
