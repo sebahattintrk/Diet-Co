@@ -388,8 +388,9 @@ ${medicalBlock}
     let loggedItem = null;
 
     try {
+      // Birincil olarak en stabil ve hızlı model denenir
       const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash-lite',
+        model: 'gemini-2.0-flash',
         contents: message,
         config: { systemInstruction, temperature: 0.6 },
       });
@@ -428,7 +429,7 @@ ${medicalBlock}
         .trim();
 
     } catch (aiErr) {
-      console.error('Chat AI hatası:', aiErr.message || aiErr);
+      console.error('🚨 [CHAT AI KRITIK HATA DETAYI]:', JSON.stringify(aiErr, Object.getOwnPropertyNames(aiErr)));
       loggedItem = null;
 
       if (weightUpdated) {
