@@ -73,6 +73,14 @@ function parseWeightFromText(rawText, currentWeight) {
 function extractFoodLog(replyText, userMessage, isWeightUpdate = false) {
   if (isWeightUpdate) return null;
 
+  // Kullanıcı yalnızca bilgi, hesaplama veya soru soruyorsa KESİNLİKLE kayıt yapma
+  const isCalculationOnly = /hesaplar mısın|hesapla|kaç kalori|kac kalori|değerleri nedir|degeri nedir|ne kadar kalori|ne kadar protein|besin değer|var mıdır|varsayarsak|bilgi ver/i.test(userMessage);
+  const isExplicitLog = /ekle|kaydet|günlüğüme yaz|gunlugume yaz|işle|isle|öğünüme ekle|ogunume ekle/i.test(userMessage);
+
+  if (isCalculationOnly && !isExplicitLog) {
+    return null;
+  }
+
   let parsed = null;
 
   const tagMatch = replyText.match(/\[BESIN_KAYIT:\s*(\{.*?\})\s*\]/i);
@@ -94,7 +102,7 @@ function extractFoodLog(replyText, userMessage, isWeightUpdate = false) {
   const hasFoodAction = /yedim|içtim|ictim|tükettim|yendi|kahvaltı|öğün|atıştırdım/i.test(userMessage);
   const isWeightContext = /kilo aldım|kilo verdim|tartıldım|kg oldum|kilo olarak güncelle/i.test(userMessage);
 
-  if (!parsed && hasFoodAction && !isWeightContext) {
+  if (!parsed && hasFoodAction && !isWeightContext && !isCalculationOnly) {
     const calMatch = replyText.match(/(?:Kalori|kcal)\s*[:=~]?\s*(\d+)/i);
     const proMatch = replyText.match(/Protein\s*[:=~]?\s*(\d+(?:\.\d+)?)/i);
     const carbMatch = replyText.match(/(?:Karbonhidrat|Karb)\s*[:=~]?\s*(\d+(?:\.\d+)?)/i);
@@ -380,7 +388,11 @@ ${medicalBlock}
 🚨 ÇOK ÖNEMLİ KURALLAR:
 1. Kullanıcı kilo aldığını, kilo verdiğini veya tartı sonucunu söylüyorsa bu bir YEMEK DEĞİLDİR. Asla [BESIN_KAYIT] etiketi üretme.
 2. Kullanıcının hedefiyle ters düşen bir kilo değişimi varsa KESİNLİKLE TEBRİK ETME. Durumu profesyonel bir koç gibi değerlendir.
-3. Yalnızca kullanıcı açıkça bir yiyecek/içecek yediğini/içtiğini belirttiğinde CEVABININ EN SONUNA ŞU ETİKETİ EKLE:
+3. KULLANICI YALNIZCA BİLGİ/HESAPLAMA İSTİYORSA VEYA DANIŞIYORSA:
+   Örnek: "kaloriyi hesaplar mısın", "kaç kalori", "ne kadar protein var", "bunun besin değeri nedir", "varsayarsak ne olur".
+   - KESİNLİKLE [BESIN_KAYIT] ETİKETİ ÜRETME!
+   - Kullanıcıya sadece değerleri açıkla ve koçluk tavsiyeni ver.
+4. YALNIZCA VE YALNIZCA kullanıcı açıkça tükettiğini ve günlüğüne/sistemine eklenmesini istediğini söylerse (Örn: "200 gram tavuk yedim ekle", "günlüğüme kaydet", "öğün olarak işle") CEVABININ EN SONUNA ŞU ETİKETİ EKLE:
 [BESIN_KAYIT: {"food_name": "Öğün Adı", "calories": 250, "protein_g": 15, "carbs_g": 20, "fats_g": 8}]
 `;
 
@@ -407,8 +419,7 @@ ${medicalBlock}
             VALUES (
               $1, $2, $3, $4, $5, $6, 
               ${ACTIVE_DATE_SQL},
-              (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul')
-            )
+              (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))
           `, [
             targetUserId,
             food.food_name || 'Öğün',
