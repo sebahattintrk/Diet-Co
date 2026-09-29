@@ -350,7 +350,7 @@ router.post('/send-feedback', async (req, res) => {
 
   console.log(`📩 [GERİ BİLDİRİM İSTEĞİ]: ${senderName} (${senderEmail}) - ${subject}`);
 
-  // 1. Önce veritabanına garanti kayıt
+  // 1. Veritabanına kalıcı kayıt (Mesaj asla kaybolmaz)
   try {
     await db.query(
       `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -361,14 +361,13 @@ router.post('/send-feedback', async (req, res) => {
     console.warn('DB kayıt uyarısı:', dbErr.message);
   }
 
-  // 2. SMTP Ayarları Kontrolü
   const host = process.env.SMTP_HOST || 'mt-xtar.guzelhosting.com';
-  const port = Number(process.env.SMTP_PORT) || 465;
+  const port = Number(process.env.SMTP_PORT) || 587;
   const user = process.env.SMTP_USER || 'kurumsal@dietcoapp.com';
   const pass = process.env.SMTP_PASS;
 
   if (!pass) {
-    console.error('❌ [SMTP HATA]: SMTP_PASS ortam değişkeni boş! Render Environment kontrol edilmeli.');
+    console.error('❌ [SMTP HATA]: SMTP_PASS tanımlı değil!');
     return res.json({ success: true, message: 'Bildirim kaydedildi ancak mail şifresi eksik.' });
   }
 
@@ -376,18 +375,22 @@ router.post('/send-feedback', async (req, res) => {
     const transporter = nodemailer.createTransport({
       host: host,
       port: port,
-      secure: port === 465, // 465 ise true, 587 ise false
+      secure: false, // Port 587 STARTTLS kullanır
+      requireTLS: true,
       auth: {
         user: user,
         pass: pass,
       },
       tls: {
-        rejectUnauthorized: false, // Sertifika doğrulama hatasını engeller
+        rejectUnauthorized: false,
       },
+      connectionTimeout: 10000, // 10 saniye sonra zorla kes, kilitlenmeyi önle
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
     });
 
     const mailOptions = {
-      from: `"Diet-Co Destek" <${user}>`, // cPanel kuralları gereği SMTP kullanıcısıyla birebir aynı olmalı
+      from: `"Diet-Co Destek" <${user}>`,
       to: 'kurumsal@dietcoapp.com',
       replyTo: senderEmail !== 'Belirtilmedi' ? senderEmail : undefined,
       subject: `[Kullanıcı Bildirimi] ${subject}`,
@@ -404,15 +407,15 @@ router.post('/send-feedback', async (req, res) => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log('✅ [MAIL GÖNDERİLDİ BAŞARILI]:', info.messageId, info.response);
+    console.log('✅ [MAIL GÖNDERİLDİ BAŞARILI]:', info.messageId);
 
     return res.json({
       success: true,
       message: 'Geri bildiriminiz başarıyla iletildi.',
     });
   } catch (mailError) {
-    console.error('🔥 [SMTP GÖNDERİM HATASI DETAYLI]:', mailError);
-    // Hata olsa bile kullanıcıya olumlu dönüp DB'de tutuyoruz
+    console.error('🔥 [SMTP GÖNDERİM HATASI]:', mailError.message || mailError);
+    // Mail sunucusu engellense bile DB'de kayıtlı olduğu için kullanıcıyı mağdur etmiyoruz
     return res.json({
       success: true,
       message: 'Geri bildiriminiz kaydedildi.',
