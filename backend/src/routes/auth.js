@@ -348,7 +348,9 @@ router.post('/send-feedback', async (req, res) => {
   const senderEmail = email || 'Belirtilmedi';
   const targetUserId = userId || 1;
 
-  // 1. Önce bildirimi veritabanına kalıcı olarak kaydet (İstek asla kaybolmaz)
+  console.log(`📩 [GERİ BİLDİRİM İSTEĞİ]: ${senderName} (${senderEmail}) - ${subject}`);
+
+  // 1. Önce veritabanına garanti kayıt
   try {
     await db.query(
       `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -356,73 +358,66 @@ router.post('/send-feedback', async (req, res) => {
       [targetUserId, `[DESTEK / GERİ BİLDİRİM]\nKonu: ${subject}\nGönderen: ${senderName} (${senderEmail})\nMesaj: ${message}`]
     );
   } catch (dbErr) {
-    console.warn('Geri bildirim DB kayıt uyarısı:', dbErr.message);
+    console.warn('DB kayıt uyarısı:', dbErr.message);
   }
 
-  // 2. Kullanıcıyı bekletmeden anında başarı yanıtı dön (Donmayı engeller)
-  res.json({
-    success: true,
-    message: 'Geri bildiriminiz başarıyla iletildi.',
-  });
+  // 2. SMTP Ayarları Kontrolü
+  const host = process.env.SMTP_HOST || 'mt-xtar.guzelhosting.com';
+  const port = Number(process.env.SMTP_PORT) || 465;
+  const user = process.env.SMTP_USER || 'kurumsal@dietcoapp.com';
+  const pass = process.env.SMTP_PASS;
 
-  // 3. E-posta gönderimini arka planda timeout korumalı olarak yürüt
-  (async () => {
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      console.log(`ℹ️ [Geri Bildirim Kaydedildi]: ${senderName} (${senderEmail}) - ${subject}`);
-      return;
-    }
+  if (!pass) {
+    console.error('❌ [SMTP HATA]: SMTP_PASS ortam değişkeni boş! Render Environment kontrol edilmeli.');
+    return res.json({ success: true, message: 'Bildirim kaydedildi ancak mail şifresi eksik.' });
+  }
 
-    try {
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST || 'mail.dietcoapp.com',
-        port: Number(process.env.SMTP_PORT) || 465,
-        secure: true, // 465 portu için true olmalı
-        auth: {
-          user: process.env.SMTP_USER || 'kurumsal@dietcoapp.com',
-          pass: process.env.SMTP_PASS,
-        },
-        tls: {
-          rejectUnauthorized: false, // cPanel self-signed SSL engeline takılmasını önler
-        },
-      });
+  try {
+    const transporter = nodemailer.createTransport({
+      host: host,
+      port: port,
+      secure: port === 465, // 465 ise true, 587 ise false
+      auth: {
+        user: user,
+        pass: pass,
+      },
+      tls: {
+        rejectUnauthorized: false, // Sertifika doğrulama hatasını engeller
+      },
+    });
 
-      const info = await transporter.sendMail({
-        from: `"Diet-Co Destek" <${process.env.SMTP_USER || 'kurumsal@dietcoapp.com'}>`,
-        to: 'kurumsal@dietcoapp.com',
-        replyTo: senderEmail !== 'Belirtilmedi' ? senderEmail : undefined,
-        subject: `[Kullanıcı Bildirimi] ${subject}`,
-        html: `
-          <h3>Diet-Co Uygulamasından Yeni Geri Bildirim</h3>
-          <p><strong>Gönderen:</strong> ${senderName} (${senderEmail})</p>
-          <p><strong>Kullanıcı ID:</strong> ${targetUserId}</p>
-          <p><strong>Konu:</strong> ${subject}</p>
-          <hr />
-          <p><strong>Mesaj:</strong></p>
-          <p style="white-space: pre-wrap;">${message}</p>
-        `,
-      });
-      console.log('✅ Webmail Gönderimi Başarılı! Message ID:', info.messageId);
+    const mailOptions = {
+      from: `"Diet-Co Destek" <${user}>`, // cPanel kuralları gereği SMTP kullanıcısıyla birebir aynı olmalı
+      to: 'kurumsal@dietcoapp.com',
+      replyTo: senderEmail !== 'Belirtilmedi' ? senderEmail : undefined,
+      subject: `[Kullanıcı Bildirimi] ${subject}`,
+      html: `
+        <h3>Diet-Co Uygulamasından Yeni Geri Bildirim</h3>
+        <p><strong>Gönderen Adı Soyadı:</strong> ${senderName}</p>
+        <p><strong>Kayıtlı E-Posta:</strong> ${senderEmail}</p>
+        <p><strong>Kullanıcı ID:</strong> ${targetUserId}</p>
+        <p><strong>Konu:</strong> ${subject}</p>
+        <hr />
+        <p><strong>Mesaj:</strong></p>
+        <p style="white-space: pre-wrap;">${message}</p>
+      `,
+    };
 
-      await transporter.sendMail({
-        from: `"Diet-Co Destek" <${process.env.SMTP_USER}>`,
-        to: 'kurumsal@dietcoapp.com',
-        replyTo: email || undefined,
-        subject: `[Kullanıcı Bildirimi] ${subject}`,
-        html: `
-          <h3>Diet-Co Uygulamasından Yeni Geri Bildirim</h3>
-          <p><strong>Gönderen:</strong> ${senderName} (${senderEmail})</p>
-          <p><strong>Kullanıcı ID:</strong> ${targetUserId}</p>
-          <p><strong>Konu:</strong> ${subject}</p>
-          <hr />
-          <p><strong>Mesaj:</strong></p>
-          <p style="white-space: pre-wrap;">${message}</p>
-        `,
-      });
-      console.log('✅ Geri bildirim e-postası başarıyla iletildi.');
-    } catch (mailErr) {
-      console.error('⚠️ SMTP Gönderim Hatası (Geri bildirim DB\'de güvende):', mailErr.message);
-    }
-  })();
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ [MAIL GÖNDERİLDİ BAŞARILI]:', info.messageId, info.response);
+
+    return res.json({
+      success: true,
+      message: 'Geri bildiriminiz başarıyla iletildi.',
+    });
+  } catch (mailError) {
+    console.error('🔥 [SMTP GÖNDERİM HATASI DETAYLI]:', mailError);
+    // Hata olsa bile kullanıcıya olumlu dönüp DB'de tutuyoruz
+    return res.json({
+      success: true,
+      message: 'Geri bildiriminiz kaydedildi.',
+    });
+  }
 });
 
 module.exports = router;
