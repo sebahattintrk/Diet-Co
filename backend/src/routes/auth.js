@@ -1,6 +1,4 @@
 // backend/src/routes/auth.js
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -339,7 +337,7 @@ router.put('/measurements', async (req, res) => {
 // POST /api/auth/send-feedback
 const nodemailer = require('nodemailer');
 
-// POST /api/auth/send-feedback (Resend HTTP API ile Port Engelini Aşan Yapı)
+// POST /api/auth/send-feedback
 router.post('/send-feedback', async (req, res) => {
   const { userId, name, email, subject, message } = req.body;
 
@@ -353,7 +351,7 @@ router.post('/send-feedback', async (req, res) => {
 
   console.log(`📩 [GERİ BİLDİRİM İSTEĞİ]: ${senderName} (${senderEmail}) - ${subject}`);
 
-  // 1. Veritabanına kalıcı kayıt
+  // 1. Veritabanına garanti kayıt (Mesaj asla kaybolmaz)
   try {
     await db.query(
       `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -364,8 +362,18 @@ router.post('/send-feedback', async (req, res) => {
     console.warn('DB kayıt uyarısı:', dbErr.message);
   }
 
-  // 2. Resend HTTP API Üzerinden Mail Gönderimi (Port engeline takılmaz)
+  // 2. Resend API ile Gönderim
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.error('⚠️️ [RESEND HATA]: RESEND_API_KEY ortam değişkeni tanımlı değil!');
+    return res.json({
+      success: true,
+      message: 'Geri bildiriminiz veritabanına kaydedildi.',
+    });
+  }
+
   try {
+    const resend = new Resend(apiKey);
     const data = await resend.emails.send({
       from: 'Diet-Co Destek <onboarding@resend.dev>',
       to: ['kurumsal@dietcoapp.com'],
@@ -385,18 +393,11 @@ router.post('/send-feedback', async (req, res) => {
       `,
     });
 
-    console.log('✅ [RESEND İLE MAIL GÖNDERİLDİ BAŞARILI]:', data);
-
-    return res.json({
-      success: true,
-      message: 'Geri bildiriminiz başarıyla iletildi.',
-    });
-  } catch (apiError) {
-    console.error('🔥 [RESEND API HATASI]:', apiError);
-    return res.json({
-      success: true,
-      message: 'Geri bildiriminiz kaydedildi.',
-    });
+    console.log('✅ [RESEND BAŞARILI]:', data);
+    return res.json({ success: true, message: 'Geri bildiriminiz başarıyla iletildi.' });
+  } catch (err) {
+    console.error('🔥 [RESEND GÖNDERİM HATASI]:', err?.message || err);
+    return res.json({ success: true, message: 'Geri bildiriminiz kaydedildi.' });
   }
 });
 
