@@ -34,7 +34,7 @@ async function estimateMealFromPhoto({ filePath }) {
   const img = readImage(filePath);
   if (!img) return { source: 'error', estimate: null, error: 'photo_not_readable' };
 
-  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt();

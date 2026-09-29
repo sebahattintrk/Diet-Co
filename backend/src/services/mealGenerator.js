@@ -161,7 +161,7 @@ async function tryOnce({ user, excludeNames, feedback }) {
 
 async function callGemini({ user, excludeNames, feedback }) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, excludeNames, feedback);

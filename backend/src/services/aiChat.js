@@ -145,7 +145,7 @@ async function generateChatResponse(userId, userMessage, conversationHistory = [
   const systemPrompt = await buildDynamicCoachPrompt(userId);
 
   const model = genAI.getGenerativeModel({
-    model: 'gemini-3.6-flash',
+    model: 'gemini-3.5-flash-lite',
     systemInstruction: systemPrompt,
   });
 
