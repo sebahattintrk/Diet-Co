@@ -80,7 +80,7 @@ async function geminiSuggestion(user, kind, base, remainingCal, remainingProtein
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim().length === 0) return null;
 
-  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const disliked = Array.isArray(user.disliked_foods) && user.disliked_foods.length

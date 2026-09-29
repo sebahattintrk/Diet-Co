@@ -50,7 +50,7 @@ async function buildInsight(user, last7, today) {
 }
 
 async function callGemini(apiKey, user, last7, today) {
-  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, last7, today);

@@ -147,7 +147,7 @@ Görev: Bu verilere dayanarak danışanına samimi, profesyonel bir ${period ===
     }
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash-lite',
+      model: 'gemini-3.8-flash',
       contents: prompt,
     });
 

@@ -63,7 +63,7 @@ async function narrate(user, metrics) {
     return { ...fallbackNarration(user, metrics), source: 'rule_engine' };
   }
 
-  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, metrics);

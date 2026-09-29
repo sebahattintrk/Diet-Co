@@ -27,7 +27,7 @@ async function analyzePhoto({ user, latest, previous }) {
   }
   const previousImage = previous ? readImage(previous.file_path) : null;
 
-  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const prompt = buildPrompt(user, latest, previous);
