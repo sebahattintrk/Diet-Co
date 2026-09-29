@@ -1,4 +1,6 @@
 // backend/src/routes/auth.js
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -337,6 +339,7 @@ router.put('/measurements', async (req, res) => {
 // POST /api/auth/send-feedback
 const nodemailer = require('nodemailer');
 
+// POST /api/auth/send-feedback (Resend HTTP API ile Port Engelini Aşan Yapı)
 router.post('/send-feedback', async (req, res) => {
   const { userId, name, email, subject, message } = req.body;
 
@@ -350,7 +353,7 @@ router.post('/send-feedback', async (req, res) => {
 
   console.log(`📩 [GERİ BİLDİRİM İSTEĞİ]: ${senderName} (${senderEmail}) - ${subject}`);
 
-  // 1. Veritabanına kalıcı kayıt (Mesaj asla kaybolmaz)
+  // 1. Veritabanına kalıcı kayıt
   try {
     await db.query(
       `INSERT INTO chat_messages (user_id, message, sender, created_at)
@@ -361,61 +364,35 @@ router.post('/send-feedback', async (req, res) => {
     console.warn('DB kayıt uyarısı:', dbErr.message);
   }
 
-  const host = process.env.SMTP_HOST || 'mt-xtar.guzelhosting.com';
-  const port = Number(process.env.SMTP_PORT) || 587;
-  const user = process.env.SMTP_USER || 'kurumsal@dietcoapp.com';
-  const pass = process.env.SMTP_PASS;
-
-  if (!pass) {
-    console.error('❌ [SMTP HATA]: SMTP_PASS tanımlı değil!');
-    return res.json({ success: true, message: 'Bildirim kaydedildi ancak mail şifresi eksik.' });
-  }
-
+  // 2. Resend HTTP API Üzerinden Mail Gönderimi (Port engeline takılmaz)
   try {
-    const transporter = nodemailer.createTransport({
-      host: host,
-      port: port,
-      secure: false, // Port 587 STARTTLS kullanır
-      requireTLS: true,
-      auth: {
-        user: user,
-        pass: pass,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-      connectionTimeout: 10000, // 10 saniye sonra zorla kes, kilitlenmeyi önle
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
+    const data = await resend.emails.send({
+      from: 'Diet-Co Destek <onboarding@resend.dev>',
+      to: ['kurumsal@dietcoapp.com'],
+      reply_to: senderEmail !== 'Belirtilmedi' ? senderEmail : undefined,
+      subject: `[Diet-Co Bildirim] ${subject}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
+          <h2 style="color: #059669;">Diet-Co Yeni Kullanıcı Bildirimi</h2>
+          <p><strong>Gönderen:</strong> ${senderName}</p>
+          <p><strong>Kayıtlı E-Posta:</strong> ${senderEmail}</p>
+          <p><strong>Kullanıcı ID:</strong> ${targetUserId}</p>
+          <p><strong>Konu:</strong> ${subject}</p>
+          <hr style="border: 0; border-top: 1px solid #E5E7EB; margin: 16px 0;" />
+          <h3 style="color: #374151;">Mesaj:</h3>
+          <p style="background: #F9FAFB; padding: 14px; border-radius: 8px; border: 1px solid #E5E7EB; white-space: pre-wrap;">${message}</p>
+        </div>
+      `,
     });
 
-    const mailOptions = {
-      from: `"Diet-Co Destek" <${user}>`,
-      to: 'kurumsal@dietcoapp.com',
-      replyTo: senderEmail !== 'Belirtilmedi' ? senderEmail : undefined,
-      subject: `[Kullanıcı Bildirimi] ${subject}`,
-      html: `
-        <h3>Diet-Co Uygulamasından Yeni Geri Bildirim</h3>
-        <p><strong>Gönderen Adı Soyadı:</strong> ${senderName}</p>
-        <p><strong>Kayıtlı E-Posta:</strong> ${senderEmail}</p>
-        <p><strong>Kullanıcı ID:</strong> ${targetUserId}</p>
-        <p><strong>Konu:</strong> ${subject}</p>
-        <hr />
-        <p><strong>Mesaj:</strong></p>
-        <p style="white-space: pre-wrap;">${message}</p>
-      `,
-    };
-
-    const info = await transporter.sendMail(mailOptions);
-    console.log('✅ [MAIL GÖNDERİLDİ BAŞARILI]:', info.messageId);
+    console.log('✅ [RESEND İLE MAIL GÖNDERİLDİ BAŞARILI]:', data);
 
     return res.json({
       success: true,
       message: 'Geri bildiriminiz başarıyla iletildi.',
     });
-  } catch (mailError) {
-    console.error('🔥 [SMTP GÖNDERİM HATASI]:', mailError.message || mailError);
-    // Mail sunucusu engellense bile DB'de kayıtlı olduğu için kullanıcıyı mağdur etmiyoruz
+  } catch (apiError) {
+    console.error('🔥 [RESEND API HATASI]:', apiError);
     return res.json({
       success: true,
       message: 'Geri bildiriminiz kaydedildi.',
