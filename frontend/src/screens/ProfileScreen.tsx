@@ -54,7 +54,6 @@ export const ProfileScreen = () => {
 
     try {
       setLoadingFresh(true);
-      // Doğrudan kullanıcının users tablosundaki en güncel satırını istiyoruz
       const res = await api.get(`/api/dashboard?userId=${currentUserId}`);
       
       const freshUserData = res.data?.user || res.data;
@@ -81,7 +80,6 @@ export const ProfileScreen = () => {
   const activeUser = dbUser || user || {};
   const currentAge = calculateDynamicAge(activeUser?.birth_date, activeUser?.age);
   
-  // 🎯 VERİTABANINDAKİ users.weight_kg DEĞERİNİ DOĞRUDAN YANSIT
   const rawWeight = activeUser?.weight_kg ?? activeUser?.weight ?? user?.weight_kg ?? user?.weight;
   const currentWeight = rawWeight !== undefined && rawWeight !== null ? parseFloat(rawWeight) : 55.0;
   
@@ -98,6 +96,12 @@ export const ProfileScreen = () => {
   const [rightLeg, setRightLeg] = useState('');
   const [leftLeg, setLeftLeg] = useState('');
   const [workoutDays, setWorkoutDays] = useState('0');
+
+  // 📩 Geri Bildirim & Soru Modalı State'leri
+  const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
+  const [sendingFeedback, setSendingFeedback] = useState(false);
+  const [feedbackSubject, setFeedbackSubject] = useState('');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
 
   const handleOpenEditModal = () => {
     try {
@@ -152,6 +156,46 @@ export const ProfileScreen = () => {
     }
   };
 
+  // 📩 Uygulama İçinden Doğrudan E-Posta Gönderme (Harici sayfaya yönlendirmez)
+  const handleSendFeedback = async () => {
+    if (!feedbackSubject.trim()) {
+      Alert.alert('Eksik Bilgi', 'Lütfen bir başlık veya konu belirtiniz.');
+      return;
+    }
+    if (!feedbackMessage.trim()) {
+      Alert.alert('Eksik Bilgi', 'Lütfen aklınıza takılan soruyu veya mesajınızı yazınız.');
+      return;
+    }
+
+    setSendingFeedback(true);
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (_) {}
+
+    try {
+      await api.post('/api/auth/send-feedback', {
+        userId: activeUser?.id || currentUserId,
+        name: activeUser?.name || 'Kullanıcı',
+        email: activeUser?.email || '',
+        subject: feedbackSubject.trim(),
+        message: feedbackMessage.trim(),
+      });
+
+      try {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch (_) {}
+
+      setFeedbackModalVisible(false);
+      setFeedbackSubject('');
+      setFeedbackMessage('');
+      Alert.alert('İletildi! 🚀', 'Geri bildiriminiz başarıyla ekibimize gönderildi. En kısa sürede incelenecektir.');
+    } catch (err: any) {
+      Alert.alert('Hata', 'Geri bildirim iletilirken bir sorun oluştu: ' + (err?.response?.data?.error || err?.message || ''));
+    } finally {
+      setSendingFeedback(false);
+    }
+  };
+
   const getGoalTitle = (goal?: string) => {
     switch (goal) {
       case 'weight_loss':
@@ -176,7 +220,7 @@ export const ProfileScreen = () => {
   const handleDeleteAccount = () => {
     Alert.alert(
       'Hesabını ve Verilerini Sil',
-      'Tüm beslenme geçmişin, makro hedeflerin ve kişisel verilerin kalıcı olarak silinecektir.',
+      'Tüm beslenme geçmişin, makro hedeflerin ve kişisel verilerin kalıcı olarak silinecektir.\n\nNot: Apple aboneliğiniz varsa, ücret kesilmemesi için App Store ayarlarından da iptal etmeyi unutmayınız.',
       [
         { text: 'Vazgeç', style: 'cancel' },
         {
@@ -341,6 +385,22 @@ export const ProfileScreen = () => {
           </View>
         </View>
 
+        {/* 📩 GERİ BİLDİRİM & DESTEK BUTONU */}
+        <TouchableOpacity
+          style={styles.feedbackButton}
+          onPress={() => setFeedbackModalVisible(true)}
+          activeOpacity={0.85}
+        >
+          <View style={styles.feedbackIconCircle}>
+            <Ionicons name="mail-outline" size={18} color="#059669" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.feedbackButtonTitle}>Geri Bildirim & Destek</Text>
+            <Text style={styles.feedbackButtonSub}>Aklınıza takılan soruları bize doğrudan iletin</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+        </TouchableOpacity>
+
         {/* Oturumu Kapat ve Hesap Silme */}
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
           <Ionicons name="log-out-outline" size={18} color="#DC2626" />
@@ -355,7 +415,7 @@ export const ProfileScreen = () => {
         <Text style={styles.versionFooter}>Diet-Co AI Engine • Sürüm 1.0.4</Text>
       </ScrollView>
 
-      {/* Modal - Klavye Korumalı */}
+      {/* 1. Modal: Vücut Ölçüleri */}
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -455,6 +515,86 @@ export const ProfileScreen = () => {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* 2. Modal: Doğrudan Uygulama İçi Geri Bildirim */}
+      <Modal
+        visible={feedbackModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setFeedbackModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Geri Bildirim & Destek</Text>
+                <Text style={styles.feedbackModalSub}>
+                  Aklınıza takılan soruları doğrudan ekibimize iletin.
+                </Text>
+              </View>
+              <Pressable onPress={() => setFeedbackModalVisible(false)} hitSlop={10}>
+                <Ionicons name="close" size={22} color="#64748B" />
+              </Pressable>
+            </View>
+
+            {/* Gönderen Bilgisi Şeridi */}
+            <View style={styles.senderInfoBox}>
+              <Ionicons name="person-circle-outline" size={18} color="#059669" />
+              <Text style={styles.senderInfoText}>
+                {activeUser?.name || 'Kullanıcı'} ({activeUser?.email || 'kullanici@dietco.app'})
+              </Text>
+            </View>
+
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.inputLabel}>Konu / Başlık</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Örn: Kalori hesaplaması hakkında bir soru"
+                placeholderTextColor="#94A3B8"
+                value={feedbackSubject}
+                onChangeText={setFeedbackSubject}
+              />
+            </View>
+
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.inputLabel}>Açıklama / Mesajınız</Text>
+              <TextInput
+                style={[styles.modalInput, styles.feedbackTextArea]}
+                placeholder="Detaylı olarak sorunuzu veya geri bildiriminizi buraya yazabilirsiniz..."
+                placeholderTextColor="#94A3B8"
+                multiline
+                numberOfLines={5}
+                textAlignVertical="top"
+                value={feedbackMessage}
+                onChangeText={setFeedbackMessage}
+              />
+            </View>
+
+            <TouchableOpacity
+              onPress={handleSendFeedback}
+              disabled={sendingFeedback}
+              style={[styles.saveBtn, { marginTop: 16 }, sendingFeedback && { opacity: 0.7 }]}
+              activeOpacity={0.85}
+            >
+              {sendingFeedback ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="send" size={16} color="#FFFFFF" />
+                  <Text style={styles.saveBtnText}>Mesajı Gönder</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
+            <Text style={styles.mailHint}>
+              Mesajınız kurumsal@dietcoapp.com adresine doğrudan iletilecektir.
+            </Text>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -505,26 +645,85 @@ const styles = StyleSheet.create({
   sectionHeader: { fontSize: 11, fontWeight: '800', color: '#64748B', letterSpacing: 1 },
   editButton: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#ECFDF5', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: '#A7F3D0' },
   editButtonText: { fontSize: 12, fontWeight: '700', color: '#059669' },
-  cardGroup: { backgroundColor: '#FFFFFF', borderRadius: 18, borderWidth: 1, borderColor: '#E6EFE9', marginBottom: 20, overflow: 'hidden' },
+  cardGroup: { backgroundColor: '#FFFFFF', borderRadius: 18, borderWidth: 1, borderColor: '#E6EFE9', marginBottom: 14, overflow: 'hidden' },
   gridRow: { flexDirection: 'row', paddingVertical: 14, paddingHorizontal: 12 },
   gridCell: { flex: 1, alignItems: 'center' },
   gridCellLabel: { fontSize: 11, fontWeight: '600', color: '#94A3B8', marginBottom: 2 },
   gridCellValue: { fontSize: 14, fontWeight: '800', color: '#0F172A' },
   horizontalLine: { height: 1, backgroundColor: '#F1F5F2', marginHorizontal: 14 },
-  logoutButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FEF2F2', borderRadius: 16, paddingVertical: 14, gap: 8, borderWidth: 1, borderColor: '#FEE2E2', marginTop: 6 },
+
+  feedbackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E6EFE9',
+    marginBottom: 14,
+    gap: 12,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  feedbackIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  feedbackButtonTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  feedbackButtonSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+
+  logoutButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FEF2F2', borderRadius: 16, paddingVertical: 14, gap: 8, borderWidth: 1, borderColor: '#FEE2E2', marginTop: 4 },
   logoutButtonText: { fontSize: 14, fontWeight: '800', color: '#DC2626' },
   deleteButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 10, paddingVertical: 10, gap: 6 },
   deleteButtonText: { fontSize: 12, fontWeight: '600', color: '#94A3B8' },
   versionFooter: { textAlign: 'center', fontSize: 11, color: '#CBD5E1', fontWeight: '600', marginTop: 18 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.55)', justifyContent: 'flex-end' },
   modalCard: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 22, paddingTop: 20, paddingBottom: Platform.OS === 'ios' ? 40 : 24 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
   modalTitle: { fontSize: 18, fontWeight: '800', color: '#0F172A' },
+  feedbackModalSub: { fontSize: 12, color: '#64748B', marginTop: 2 },
+  senderInfoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F0FDF4',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#DCFCE7',
+    marginBottom: 6,
+  },
+  senderInfoText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#047857',
+  },
   inputRow: { flexDirection: 'row', gap: 12, marginBottom: 12 },
   inputLabel: { fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 5 },
-  modalInput: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, fontWeight: '600', color: '#0F172A' },
-  saveBtn: { backgroundColor: '#059669', borderRadius: 16, paddingVertical: 14, alignItems: 'center', marginTop: 16 },
+  modalInput: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, fontWeight: '600', color: '#0F172A' },
+  feedbackTextArea: {
+    height: 100,
+    paddingTop: 10,
+  },
+  saveBtn: { backgroundColor: '#059669', borderRadius: 16, paddingVertical: 14, alignItems: 'center' },
   saveBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+  mailHint: { textAlign: 'center', fontSize: 11, color: '#94A3B8', marginTop: 10, fontWeight: '500' },
 });
 
 export default ProfileScreen;

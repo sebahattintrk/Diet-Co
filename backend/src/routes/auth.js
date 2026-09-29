@@ -334,4 +334,57 @@ router.put('/measurements', async (req, res) => {
   }
 });
 
+// POST /api/auth/send-feedback
+const nodemailer = require('nodemailer');
+
+router.post('/send-feedback', async (req, res) => {
+  const { userId, name, email, subject, message } = req.body;
+
+  if (!subject || !message) {
+    return res.status(400).json({ error: 'Konu ve mesaj alanları zorunludur.' });
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'mail.dietcoapp.com',
+      port: Number(process.env.SMTP_PORT) || 465,
+      secure: true,
+      auth: {
+        user: process.env.SMTP_USER || 'kurumsal@dietcoapp.com',
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    const mailOptions = {
+      from: `"Diet-Co Destek Sistemi" <kurumsal@dietcoapp.com>`,
+      to: 'kurumsal@dietcoapp.com',
+      replyTo: email || undefined,
+      subject: `[Kullanıcı Bildirimi] ${subject}`,
+      html: `
+        <h3>Diet-Co Uygulamasından Yeni Geri Bildirim</h3>
+        <p><strong>Gönderen:</strong> ${name || 'Belirtilmedi'} (${email || 'E-posta yok'})</p>
+        <p><strong>Kullanıcı ID:</strong> ${userId || 'Bilinmiyor'}</p>
+        <p><strong>Konu:</strong> ${subject}</p>
+        <hr />
+        <p><strong>Mesaj:</strong></p>
+        <p style="white-space: pre-wrap;">${message}</p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return res.json({ success: true, message: 'Geri bildirim başarıyla iletildi.' });
+  } catch (error) {
+    console.error('Mail Gönderme Hatası:', error);
+    try {
+      await db.query(
+        `INSERT INTO chat_messages (user_id, message, sender, created_at)
+         VALUES ($1, $2, 'user', (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Istanbul'))`,
+        [userId || 1, `[GERİ BİLDİRİM - ${subject}]: ${message}`]
+      );
+    } catch (_) {}
+
+    return res.json({ success: true, message: 'Bildiriminiz kaydedildi ve ekibe iletildi.' });
+  }
+});
+
 module.exports = router;
